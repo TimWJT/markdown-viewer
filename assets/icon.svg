@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4f86f7"/>
+      <stop offset="1" stop-color="#2456c8"/>
+    </linearGradient>
+    <linearGradient id="sheet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e8ecf5"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- page -->
+  <g transform="translate(116 96)">
+    <path d="M0 26A26 26 0 0 1 26 0h148l106 106v188a26 26 0 0 1-26 26H26A26 26 0 0 1 0 294z"
+          fill="url(#sheet)"/>
+    <path d="M174 0l106 106H200a26 26 0 0 1-26-26z" fill="#b9c6de"/>
+
+    <!-- the markdown M -->
+    <path d="M46 246v-96h30l34 44 34-44h30v96h-30v-53l-34 43-34-43v53z" fill="#2456c8"/>
+    <!-- the markdown down-arrow -->
+    <path d="M214 150h30v50h28l-43 50-43-50h28z" fill="#2456c8"/>
+  </g>
+</svg>
