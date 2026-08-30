@@ -9,7 +9,6 @@
     "beforeDevCommand": "npm run build"
   },
   "app": {
-    "withGlobalTauri": true,
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost blob:; script-src 'self'"
     },
