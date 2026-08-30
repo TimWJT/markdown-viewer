@@ -28,14 +28,31 @@ const bundleJs = js.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
 const bundleCss = css.outputFiles[0].text;
 const tpl = await readFile(join(here, 'src/index.html'), 'utf8');
 
-const html = tpl
+// Two shapes from one template:
+//
+//   index.html + app.css + app.js  -> what Tauri bundles. Keeping the script
+//     external lets the packaged app run under a strict `script-src 'self'`
+//     CSP, which matters for a program that renders untrusted files.
+//   Markdown Viewer.html           -> everything inlined, the standalone
+//     download that works from file:// with no server and no siblings.
+const inlined = tpl
   .replace('/*__CSS__*/', () => bundleCss)
   .replace('/*__JS__*/', () => bundleJs);
 
-await mkdir(out, { recursive: true });
-// index.html is what Tauri bundles; the named copy is the standalone download.
-await writeFile(join(out, 'index.html'), html, 'utf8');
-await writeFile(join(out, OUT_NAME), html, 'utf8');
+const external = tpl
+  .replace('<style>/*__CSS__*/</style>', '<link rel="stylesheet" href="app.css">')
+  .replace('<script>/*__JS__*/</script>', '<script src="app.js" defer></script>');
 
-const kb = (Buffer.byteLength(html, 'utf8') / 1024).toFixed(0);
-console.log(`built dist/index.html + dist/${OUT_NAME}  (${kb} KB, single file, zero network)`);
+if (external.includes('__CSS__') || external.includes('__JS__')) {
+  throw new Error('template markers changed — the external build did not substitute');
+}
+
+await mkdir(out, { recursive: true });
+await writeFile(join(out, 'index.html'), external, 'utf8');
+await writeFile(join(out, 'app.css'), bundleCss, 'utf8');
+await writeFile(join(out, 'app.js'), bundleJs, 'utf8');
+await writeFile(join(out, OUT_NAME), inlined, 'utf8');
+
+const kb = (Buffer.byteLength(inlined, 'utf8') / 1024).toFixed(0);
+console.log(`built dist/  ->  index.html + app.css + app.js (packaged app)`);
+console.log(`              ->  ${OUT_NAME} (${kb} KB standalone, zero network)`);

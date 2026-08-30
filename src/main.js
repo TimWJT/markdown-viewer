@@ -2,6 +2,13 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
 
+/* Tauri APIs. Safe to import in a plain browser — nothing touches the native
+   bridge until called, and every call site is behind the IS_TAURI check. */
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
+
 marked.setOptions({ gfm: true, breaks: false, async: false });
 
 const root = document.documentElement;
@@ -25,9 +32,9 @@ const els = {
 
 const state = { name: '', path: null, handle: null, pending: null, lastModified: 0, heads: [] };
 
-/* Present only when running inside the Tauri shell. In a plain browser this is
-   null and every file path below falls back to the web APIs. */
-const TAURI = typeof window !== 'undefined' && window.__TAURI__ ? window.__TAURI__ : null;
+/* True only inside the Tauri shell. In a plain browser every file path below
+   falls back to the web APIs. */
+const IS_TAURI = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
 
 /* ---------- tiny persistence ---------- */
 const store = {
@@ -439,9 +446,9 @@ async function openHandle(h) {
 
 /* ---------- native (Tauri) file handling ---------- */
 async function openPath(path) {
-  const text = await TAURI.core.invoke('read_text_file', { path });
+  const text = await invoke('read_text_file', { path });
   let mtime = 0;
-  try { mtime = await TAURI.core.invoke('file_mtime', { path }); } catch {}
+  try { mtime = await invoke('file_mtime', { path }); } catch {}
   state.name = path.split(/[\\/]/).pop() || path;
   state.path = path;
   state.handle = null;
@@ -450,14 +457,14 @@ async function openPath(path) {
   store.set('lastPath', path);
   setDoc(text, true);
   startWatch();
-  try { await TAURI.window.getCurrentWindow().setTitle(state.name + ' — Markdown Viewer'); } catch {}
+  try { await getCurrentWindow().setTitle(state.name + ' — Markdown Viewer'); } catch {}
   els.scroller.focus({ preventScroll: true });
 }
 
 async function openViaPicker() {
-  if (TAURI) {
+  if (IS_TAURI) {
     try {
-      const sel = await TAURI.dialog.open({
+      const sel = await openDialog({
         multiple: false,
         filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd', 'mdx', 'txt'] }],
       });
@@ -495,14 +502,14 @@ function startWatch() {
   stopWatch();
 
   /* native shell: poll mtime over the Rust side */
-  if (TAURI && state.path) {
+  if (IS_TAURI && state.path) {
     els.live.classList.add('on');
     watchTimer = setInterval(async () => {
       try {
-        const m = await TAURI.core.invoke('file_mtime', { path: state.path });
+        const m = await invoke('file_mtime', { path: state.path });
         if (m === state.lastModified) return;
         state.lastModified = m;
-        const text = await TAURI.core.invoke('read_text_file', { path: state.path });
+        const text = await invoke('read_text_file', { path: state.path });
         setDoc(text, false);
         toast('Reloaded');
       } catch {
@@ -646,16 +653,16 @@ window.addEventListener('drop', async (e) => {
 });
 
 /* The native shell swallows HTML drop events, so wire Tauri's own instead. */
-if (TAURI) {
-  TAURI.event.listen('tauri://drag-enter', () => els.drop.classList.add('on'));
-  TAURI.event.listen('tauri://drag-leave', () => els.drop.classList.remove('on'));
-  TAURI.event.listen('tauri://drag-drop', (e) => {
+if (IS_TAURI) {
+  listen('tauri://drag-enter', () => els.drop.classList.add('on'));
+  listen('tauri://drag-leave', () => els.drop.classList.remove('on'));
+  listen('tauri://drag-drop', (e) => {
     els.drop.classList.remove('on');
     const p = e.payload?.paths?.[0];
     if (p) openPath(p).catch(() => toast('Could not open that file'));
   });
   /* second launch (double-clicking another .md) routes through single-instance */
-  TAURI.event.listen('open-file', (e) => {
+  listen('open-file', (e) => {
     if (e.payload) openPath(e.payload).catch(() => toast('Could not open that file'));
   });
 }
@@ -734,9 +741,9 @@ paint();
     updateTitle();
   }
   /* native shell: a file passed on the command line wins, then the last one */
-  if (TAURI) {
+  if (IS_TAURI) {
     try {
-      const initial = await TAURI.core.invoke('initial_file');
+      const initial = await invoke('initial_file');
       if (initial) { await openPath(initial); return; }
     } catch {}
     const lastPath = store.get('lastPath', null);
