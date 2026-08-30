@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en" data-width="normal" data-font="sans" data-outline="off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Markdown Viewer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%232f6feb'/%3E%3Cpath d='M22 70V30h11l12 16 12-16h11v40H57V47L45 62 33 47v23z' fill='white'/%3E%3C/svg%3E">
+<style>/*__CSS__*/</style>
+</head>
+<body>
+
+<header id="bar">
+  <button class="btn primary" id="btn-open" title="Open a markdown file (Ctrl+O)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    Open
+  </button>
+
+  <button class="btn" id="btn-outline" title="Outline (o)" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
+  </button>
+
+  <span id="live" title="Watching file for changes"></span>
+  <span id="title"></span>
+
+  <span class="spacer"></span>
+
+  <button class="btn" id="btn-zoom-out" title="Zoom out (Ctrl -)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 12h14"/></svg>
+  </button>
+  <span id="zoomval" title="Click to reset to 100% (Ctrl 0)">100%</span>
+  <button class="btn" id="btn-zoom-in" title="Zoom in (Ctrl +)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+
+  <span class="sep"></span>
+
+  <button class="btn" id="btn-width" title="Width (w)" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8 3 12l4 4M17 8l4 4-4 4M3 12h18"/></svg>
+  </button>
+  <button class="btn" id="btn-font" title="Font (f)" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 11 5l6 14M7.5 14h7"/></svg>
+  </button>
+  <button class="btn" id="btn-theme" title="Theme (t)" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+  </button>
+  <button class="btn" id="btn-settings" title="Settings (,)" aria-pressed="false" aria-haspopup="dialog">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
+  <button class="btn" id="btn-print" title="Print / Save as PDF (Ctrl+P)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9V4h10v5M7 18H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 15h10v5H7z"/></svg>
+  </button>
+</header>
+
+<div id="shell">
+  <nav id="outline" aria-label="Document outline">
+    <h4>Outline</h4>
+    <div id="outline-list"></div>
+  </nav>
+
+  <div id="stage">
+    <main id="scroller" tabindex="0">
+      <div id="canvas"><article id="doc"></article></div>
+    </main>
+
+    <div id="empty">
+      <div class="icon">
+        <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M8.5 17v-5l2 2.4 2-2.4v5M16 12v4M14.4 14.4 16 16.2l1.6-1.8"/></svg>
+      </div>
+      <h1>Drop a markdown file here</h1>
+      <p>Or paste markdown from your clipboard. The file stays on your machine &mdash; nothing is uploaded anywhere.</p>
+      <div class="row">
+        <button class="btn primary" id="empty-open">Choose a file&hellip;</button>
+      </div>
+      <p style="font-size:12.5px;opacity:.85">
+        <kbd>Ctrl</kbd> <kbd>+</kbd> / <kbd>Ctrl</kbd> <kbd>-</kbd> zoom &nbsp;&middot;&nbsp;
+        <kbd>o</kbd> outline &nbsp;&middot;&nbsp; <kbd>t</kbd> theme &nbsp;&middot;&nbsp;
+        <kbd>w</kbd> width &nbsp;&middot;&nbsp; <kbd>f</kbd> font
+      </p>
+    </div>
+  </div>
+</div>
+
+<div id="settings" role="dialog" aria-label="Settings" aria-modal="false">
+  <div class="field">
+    <label for="cfg-zoomspeed">Zoom speed <b id="cfg-zoomspeed-val">1.0&times;</b></label>
+    <input type="range" id="cfg-zoomspeed" min="0.25" max="4" step="0.05" value="1">
+    <small id="cfg-zoomspeed-hint">about 25% per wheel notch</small>
+  </div>
+
+  <div class="field">
+    <label for="cfg-textsize">Text size <b id="cfg-textsize-val">17px</b></label>
+    <input type="range" id="cfg-textsize" min="13" max="26" step="1" value="17">
+    <small>Base size before zoom is applied</small>
+  </div>
+
+  <div class="field">
+    <label for="cfg-lineheight">Line height <b id="cfg-lineheight-val">1.68</b></label>
+    <input type="range" id="cfg-lineheight" min="1.3" max="2.1" step="0.02" value="1.68">
+  </div>
+
+  <div class="field">
+    <label for="cfg-invert">Invert zoom direction <b></b></label>
+    <label class="check"><input type="checkbox" id="cfg-invert"> Scroll down zooms in</label>
+  </div>
+
+  <button class="btn primary" id="cfg-reset" style="width:100%">Reset to defaults</button>
+</div>
+
+<div id="drop"><div>Drop to open</div></div>
+<div id="toast"></div>
+<input type="file" id="file-input" accept=".md,.markdown,.mdown,.mkd,.mdx,.txt,text/markdown,text/plain" hidden>
+
+<script>/*__JS__*/</script>
+</body>
+</html>
