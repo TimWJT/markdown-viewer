@@ -71,7 +71,7 @@ jobs:
 
             Also attached: `Markdown Viewer.html`, the whole app as one file you can
             open in any browser with no installation at all.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
 
@@ -92,7 +92,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          draft: true
+          draft: false
           files: 'dist/Markdown Viewer.html'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
