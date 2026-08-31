@@ -10,7 +10,120 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
+import markedFootnote from 'marked-footnote';
+import temml from 'temml';
+
 marked.setOptions({ gfm: true, breaks: false, async: false });
+marked.use(markedFootnote());
+
+/* ---------- math ----------
+   Temml renders LaTeX to MathML, which Chromium and WebView2 draw natively.
+   KaTeX would mean shipping ~1 MB of base64 font files to keep the standalone
+   build self-contained; MathML needs none. */
+const MATH_BLOCK = /\$\$([\s\S]+?)\$\$/g;
+const MATH_INLINE = /(?<!\\)\$(?!\s)((?:[^$\\\n]|\\.)+?)(?<!\s)\$(?!\d)/g;
+
+function renderMath() {
+  const walker = document.createTreeWalker(els.doc, NodeFilter.SHOW_TEXT, {
+    acceptNode(n) {
+      if (!n.nodeValue || n.nodeValue.indexOf('$') === -1) return NodeFilter.FILTER_REJECT;
+      /* never touch code — a shell snippet is full of dollar signs */
+      if (n.parentElement?.closest('code, pre, .findhit')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+
+  const nodes = [];
+  let n;
+  while ((n = walker.nextNode())) nodes.push(n);
+
+  for (const node of nodes) {
+    const src = node.nodeValue;
+    let html = null;
+    try {
+      html = src
+        .replace(MATH_BLOCK, (_, tex) => temml.renderToString(tex.trim(), { displayMode: true }))
+        .replace(MATH_INLINE, (_, tex) => temml.renderToString(tex.trim(), { displayMode: false }));
+    } catch {
+      continue;
+    }
+    if (html === src) continue;
+    const span = document.createElement('span');
+    span.innerHTML = DOMPurify.sanitize(html, { USE_PROFILES: { html: true, mathMl: true } });
+    node.parentNode.replaceChild(span, node);
+  }
+}
+
+/* ---------- mermaid ----------
+   Loaded from a sibling file only when a document actually contains a diagram.
+   Absent in the standalone single-file build, where the fetch simply fails and
+   the diagram stays a syntax-highlighted code block. */
+let mermaidPromise = null;
+
+function loadMermaid() {
+  if (mermaidPromise) return mermaidPromise;
+  mermaidPromise = new Promise((resolve, reject) => {
+    if (window.__mermaid) { resolve(window.__mermaid); return; }
+    const s = document.createElement('script');
+    s.src = 'mermaid.js';
+    s.onload = () => (window.__mermaid ? resolve(window.__mermaid) : reject(new Error('no mermaid')));
+    s.onerror = () => reject(new Error('mermaid unavailable'));
+    document.head.appendChild(s);
+  });
+  return mermaidPromise;
+}
+
+let mermaidSeq = 0;
+
+async function renderMermaid() {
+  const blocks = [...els.doc.querySelectorAll('pre > code.language-mermaid')];
+  if (!blocks.length) return;
+
+  let mermaid;
+  try {
+    mermaid = await loadMermaid();
+  } catch {
+    return; /* leave the code blocks exactly as they are */
+  }
+
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const explicit = root.getAttribute('data-theme');
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    theme: (explicit === 'dark' || (!explicit && dark)) ? 'dark' : 'default',
+  });
+
+  for (const code of blocks) {
+    const source = code.textContent;
+    try {
+      const { svg } = await mermaid.render('mmd-' + ++mermaidSeq, source);
+      const figure = document.createElement('div');
+      figure.className = 'mermaid-figure';
+      figure.dataset.source = source;
+      figure.innerHTML = svg;
+      code.parentElement.replaceWith(figure);
+    } catch {
+      /* invalid diagram: keep the source visible rather than blanking it */
+    }
+  }
+  scheduleMeasure();
+}
+
+/** Re-render diagrams after a theme change so they don't stay the old palette. */
+async function refreshMermaidTheme() {
+  const figures = [...els.doc.querySelectorAll('.mermaid-figure[data-source]')];
+  if (!figures.length || !window.__mermaid) return;
+  for (const fig of figures) {
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.className = 'language-mermaid';
+    code.textContent = fig.dataset.source;
+    pre.appendChild(code);
+    fig.replaceWith(pre);
+  }
+  await renderMermaid();
+}
 
 const root = document.documentElement;
 const $ = (s) => document.querySelector(s);
@@ -221,6 +334,9 @@ function zoomAnimated(target) {
   const from = scale;
   const to = clampScale(target);
   if (Math.abs(to - from) < 0.0001) return;
+  /* rAF is suspended while the window is hidden, which would strand the tween
+     part-way. Nothing to animate for an audience that cannot see it anyway. */
+  if (document.hidden) { zoomTo(to); return; }
   const t0 = performance.now();
   const dur = 160;
   const step = (t) => {
@@ -230,6 +346,14 @@ function zoomAnimated(target) {
     if (k < 1) tween = requestAnimationFrame(step);
   };
   tween = requestAnimationFrame(step);
+}
+
+/** Scale so the document's text column exactly fills the viewport width. */
+function zoomFitWidth() {
+  if (!natW) return;
+  const avail = els.scroller.clientWidth;
+  zoomAnimated(clampScale(avail / natW));
+  toast('Fit width');
 }
 
 function zoomStep(dir) {
@@ -420,6 +544,7 @@ function render(text) {
     }
   });
 
+  renderMath();
   resolveImages();
 
   /* An image that decodes after layout changes the document height, which
@@ -431,7 +556,19 @@ function render(text) {
   });
 
   buildOutline();
+  updateDocMeta(text);
   measure();
+  renderMermaid();
+}
+
+/** Word count and reading time for the toolbar. */
+function updateDocMeta(source) {
+  const el = $('#docmeta');
+  if (!el) return;
+  const words = (els.doc.textContent || '').trim().split(/\s+/).filter(Boolean).length;
+  if (!words) { el.textContent = ''; return; }
+  const mins = Math.max(1, Math.round(words / 220));
+  el.textContent = `${words.toLocaleString()} words · ${mins} min`;
 }
 
 let measureRaf = 0;
@@ -547,6 +684,8 @@ async function openPath(path) {
   state.pending = null;
   state.lastModified = mtime;
   store.set('lastPath', path);
+  pushRecent(path);
+  toggleRecent(false); /* otherwise the menu lingers, listing the file just opened */
   setDoc(text, true);
   startWatch();
   try { await getCurrentWindow().setTitle(state.name + ' — Markdown Viewer'); } catch {}
@@ -804,6 +943,84 @@ $('#find-close').addEventListener('click', closeFind);
 $('#btn-find').addEventListener('click', (e) => { e.stopPropagation(); findBarOpen() ? closeFind() : openFind(); });
 $('#find').addEventListener('click', (e) => e.stopPropagation());
 
+/* ======================================================================
+   Recent files and folder navigation (native shell only — a browser cannot
+   reopen a path it was never granted access to).
+   ====================================================================== */
+
+const RECENT_MAX = 10;
+
+function pushRecent(path) {
+  if (!IS_TAURI || !path) return;
+  const list = (store.get('recent', []) || []).filter((p) => p !== path);
+  list.unshift(path);
+  store.set('recent', list.slice(0, RECENT_MAX));
+}
+
+function baseName(p) { return p.split(/[\\/]/).pop() || p; }
+
+function buildRecentMenu() {
+  const menu = $('#recent');
+  menu.innerHTML = '';
+  const list = (store.get('recent', []) || []).filter((p) => p !== state.path);
+  if (!list.length) {
+    const d = document.createElement('div');
+    d.className = 'recent-empty';
+    d.textContent = 'No recent files';
+    menu.appendChild(d);
+    return;
+  }
+  for (const p of list) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'recent-item';
+    const name = document.createElement('b');
+    name.textContent = baseName(p);
+    const dir = document.createElement('span');
+    dir.textContent = p.slice(0, Math.max(0, p.length - baseName(p).length - 1));
+    item.append(name, dir);
+    item.title = p;
+    item.addEventListener('click', () => {
+      toggleRecent(false);
+      openPath(p).catch(() => {
+        toast('File no longer available');
+        store.set('recent', (store.get('recent', []) || []).filter((x) => x !== p));
+      });
+    });
+    menu.appendChild(item);
+  }
+}
+
+function toggleRecent(force) {
+  const on = force ?? !$('#recent').classList.contains('on');
+  if (on) buildRecentMenu();
+  $('#recent').classList.toggle('on', on);
+  $('#btn-recent').setAttribute('aria-pressed', String(on));
+  if (on) els.bar.classList.remove('hidden');
+}
+
+/** Step to the next/previous markdown file sitting in the same folder. */
+async function stepFile(dir) {
+  if (!IS_TAURI || !state.path) return;
+  let siblings;
+  try {
+    siblings = await invoke('sibling_files', { path: state.path });
+  } catch {
+    return;
+  }
+  if (!siblings || siblings.length < 2) { toast('No other files in this folder'); return; }
+  const lower = state.path.toLowerCase();
+  const i = siblings.findIndex((p) => p.toLowerCase() === lower);
+  if (i === -1) return;
+  const next = siblings[(i + dir + siblings.length) % siblings.length];
+  try {
+    await openPath(next);
+    toast(`${baseName(next)}  (${((i + dir + siblings.length) % siblings.length) + 1}/${siblings.length})`);
+  } catch {
+    toast('Could not open that file');
+  }
+}
+
 /* ---------- appearance ---------- */
 const THEMES = ['auto', 'light', 'dark'];
 let theme = store.get('theme', 'auto');
@@ -814,6 +1031,7 @@ function applyTheme(t, announce) {
   store.set('theme', theme);
   $('#btn-theme').setAttribute('aria-pressed', String(theme !== 'auto'));
   $('#btn-theme').title = 'Theme: ' + theme + ' (t)';
+  refreshMermaidTheme();
   if (announce) toast('Theme: ' + theme);
 }
 
@@ -882,6 +1100,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (findBarOpen()) { closeFind(); return; }
     toggleSettings(false);
+    toggleRecent(false);
     els.scroller.focus({ preventScroll: true });
     return;
   }
@@ -893,6 +1112,7 @@ window.addEventListener('keydown', (e) => {
   if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomStep(1); return; }
   if (mod && (e.key === '-' || e.key === '_')) { e.preventDefault(); zoomStep(-1); return; }
   if (mod && e.key === '0') { e.preventDefault(); zoomAnimated(1); return; }
+  if (mod && e.key === '9') { e.preventDefault(); zoomFitWidth(); return; }
   if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); openViaPicker(); return; }
   if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); openFind(); return; }
   if (e.key === 'F3') { e.preventDefault(); findBarOpen() ? findStep(e.shiftKey ? -1 : 1) : openFind(); return; }
@@ -900,6 +1120,8 @@ window.addEventListener('keydown', (e) => {
   if (mod) return;
 
   switch (e.key) {
+    case '[': stepFile(-1); break;
+    case ']': stepFile(1); break;
     case ',': toggleSettings(); break;
     case 'o': applyOutline(!outlineOn, true); break;
     case 't': applyTheme(THEMES[(THEMES.indexOf(theme) + 1) % 3], true); break;
@@ -970,6 +1192,9 @@ $('#btn-width').addEventListener('click', () => applyWidth(WIDTHS[(WIDTHS.indexO
 $('#btn-font').addEventListener('click', () => applyFont(font === 'sans' ? 'serif' : 'sans', false));
 $('#btn-print').addEventListener('click', () => window.print());
 $('#btn-settings').addEventListener('click', (e) => { e.stopPropagation(); toggleSettings(); });
+$('#btn-fit').addEventListener('click', zoomFitWidth);
+$('#btn-recent').addEventListener('click', (e) => { e.stopPropagation(); toggleRecent(); });
+$('#recent').addEventListener('click', (e) => e.stopPropagation());
 
 /* settings controls — live, no apply button */
 const bindRange = (id, key) => {
@@ -991,7 +1216,7 @@ $('#cfg-reset').addEventListener('click', () => {
   toast('Settings reset');
 });
 $('#settings').addEventListener('click', (e) => e.stopPropagation());
-document.addEventListener('click', () => toggleSettings(false));
+document.addEventListener('click', () => { toggleSettings(false); toggleRecent(false); });
 $('#empty-open').addEventListener('click', openViaPicker);
 els.title.addEventListener('click', async () => {
   if (state.pending && !state.handle) { try { await openHandle(state.pending); } catch {} }
@@ -1003,6 +1228,7 @@ els.fileInput.addEventListener('change', async () => {
 });
 
 /* ---------- boot ---------- */
+if (!IS_TAURI) $('#btn-recent').style.display = 'none';
 applyCfg({ remeasure: false, save: false });
 applyTheme(theme, false);
 applyWidth(width, false);

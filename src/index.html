@@ -15,12 +15,17 @@
     Open
   </button>
 
+  <button class="btn" id="btn-recent" title="Recent files" aria-pressed="false" aria-haspopup="menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+  </button>
+
   <button class="btn" id="btn-outline" title="Outline (o)" aria-pressed="false">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
   </button>
 
   <span id="live" title="Watching file for changes"></span>
   <span id="title"></span>
+  <span id="docmeta"></span>
 
   <span class="spacer"></span>
 
@@ -30,6 +35,10 @@
   <span id="zoomval" title="Click to reset to 100% (Ctrl 0)">100%</span>
   <button class="btn" id="btn-zoom-in" title="Zoom in (Ctrl +)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+
+  <button class="btn" id="btn-fit" title="Fit width (Ctrl+9)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5v14M20 5v14M8 12h8M8 12l2.5-2.5M8 12l2.5 2.5M16 12l-2.5-2.5M16 12l-2.5 2.5"/></svg>
   </button>
 
   <span class="sep"></span>
@@ -82,6 +91,8 @@
     </div>
   </div>
 </div>
+
+<div id="recent" role="menu" aria-label="Recent files"></div>
 
 <div id="find" role="search" aria-label="Find in document">
   <svg class="find-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>

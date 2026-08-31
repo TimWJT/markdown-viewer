@@ -2,7 +2,7 @@
 
 A markdown **viewer**. Not an editor, not a vault, not a note system. It renders a `.md` file, lets you zoom, and stays out of the way.
 
-Everything ships as one self-contained HTML file — parser, sanitiser, syntax highlighting and styles all inlined. No network requests, ever. Your files never leave the machine.
+The whole UI is one self-contained HTML file — parser, sanitiser, syntax highlighting, math and styles all inlined. No network requests, ever. Your files never leave the machine.
 
 ## Download
 
@@ -10,11 +10,11 @@ Grab an installer from the [Releases page](../../releases):
 
 | Platform | File | Size |
 |----------|------|------|
-| Windows | `Markdown Viewer_x64-setup.exe` | ~6 MB |
+| Windows | `Markdown Viewer_x64-setup.exe` | 2.3 MB |
 | macOS (Apple silicon) | `Markdown Viewer_aarch64.dmg` | ~6 MB |
 | macOS (Intel) | `Markdown Viewer_x64.dmg` | ~6 MB |
 | Linux | `.deb` / `.AppImage` | ~6 MB |
-| Any browser | `Markdown Viewer.html` | 265 KB, no install |
+| Any browser | `Markdown Viewer.html` | 505 KB, no install |
 
 Once installed, double-clicking any `.md` file opens it here.
 
@@ -55,6 +55,13 @@ Installers land in `src-tauri/target/release/bundle/`. `npm run app:dev` runs it
 | **Local images** | Relative image paths resolve against the document folder. |
 | **Links** | External links open in your real browser, not inside the app window. |
 | **Window** | Size and position are remembered between launches. |
+| **Math** | LaTeX renders via Temml to MathML, which the browser draws natively — no font files to ship. |
+| **Diagrams** | Mermaid diagrams render in the installed app (see the note below). |
+| **Footnotes** | GFM-style `[^1]` footnotes with back-references. |
+| **Recent files** | Dropdown beside Open, in the installed app. |
+| **Folder navigation** | `[` and `]` step through the markdown files in the same folder. |
+| **Fit width** | One click scales the document to exactly fill the window. |
+| **Reading time** | Word count and estimated minutes in the toolbar. |
 
 Opens files by drag-and-drop, the Open button, or pasting markdown straight from the clipboard. Reopens the last file you were reading on launch.
 
@@ -65,6 +72,8 @@ Opens files by drag-and-drop, the Open button, or pasting markdown straight from
 | `Ctrl` `O` | Open a file |
 | `Ctrl` `+` / `Ctrl` `-` | Zoom in / out |
 | `Ctrl` `0` | Reset zoom to 100% |
+| `Ctrl` `9` | Fit width |
+| `[` / `]` | Previous / next file in the folder |
 | `o` | Toggle outline |
 | `t` | Cycle theme |
 | `w` | Cycle reading width |
@@ -73,7 +82,7 @@ Opens files by drag-and-drop, the Open button, or pasting markdown straight from
 | `F3` | Next match |
 | `F5` | Force reload from disk |
 | `,` | Open settings |
-| `Esc` | Close settings |
+| `Esc` | Close find or settings |
 | `Ctrl` `P` | Print or save as PDF |
 
 ## Settings
@@ -120,20 +129,24 @@ Zoom is now a CSS `transform: scale()` on the document, with a sibling element r
 src/index.html       markup + toolbar, with __CSS__ / __JS__ injection points
 src/app.css          design tokens, prose styles, syntax colours, print rules
 src/main.js          all app logic (browser and native share this file)
+src/mermaid-entry.js its own bundle, fetched on demand
 build.mjs            bundles + inlines everything into one HTML file
 serve.mjs            dev-only static server
-dist/                the built single file
+dist/                index.html + app.css + app.js  (what Tauri bundles)
+                     Markdown Viewer.html            (standalone, all inlined)
+                     mermaid.js                      (lazy, app only)
 src-tauri/           the native shell
-  src/main.rs        three commands: read a path, stat it, hand over argv[1]
+  src/main.rs        four commands: read a path, stat it, list its siblings,
+                     and hand over argv[1] from a file-association launch
   tauri.conf.json    window, bundle targets, .md file association
   capabilities/      permissions granted to the window
 assets/icon.svg      source art for every generated icon
 .github/workflows/   tags -> installers for all platforms
 ```
 
-The frontend is platform-agnostic: `main.js` checks for `window.__TAURI__` and uses
-native file commands when present, browser APIs when not. There is no separate
-desktop codebase.
+The frontend is platform-agnostic: `main.js` checks for `window.__TAURI_INTERNALS__`
+and uses native file commands when present, browser APIs when not. There is no
+separate desktop codebase.
 
 Rebuild after any change to `src/`:
 
@@ -161,8 +174,14 @@ The installers are unsigned, which is why first launch shows a warning. Removing
 
 If you ever buy certificates, they slot into the existing workflow as repository secrets — `tauri-action` reads them without any change to the build itself.
 
+## A note on Mermaid
+
+Mermaid is 3.4 MB bundled — more than ten times the rest of the app. Inlining it would mean parsing 3.4 MB of JavaScript at every launch for documents that mostly contain no diagrams, so it is built as a separate `mermaid.js` fetched only when a document actually has one.
+
+The practical consequence: **the installed app renders Mermaid; the standalone HTML file does not.** In the standalone build the fetch simply fails and a diagram stays a syntax-highlighted code block. That keeps the promise the standalone build exists for — one file, no siblings, no network.
+
+Math and footnotes are inlined in both, costing about 210 KB together.
+
 ## Deliberately not included
 
 Editing, file trees, tabs, search across files, sync, plugins, wiki-links, graph view. Those are what make the other tools heavy. If you need them, use Obsidian.
-
-Mermaid diagrams and math rendering are the two omissions that might be worth adding later; both would roughly double the file size.
