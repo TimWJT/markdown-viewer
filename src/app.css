@@ -222,6 +222,41 @@ body {
 }
 #empty .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
 
+/* ---------- find in page ---------- */
+#find {
+  position: fixed; top: 48px; right: 10px; z-index: 130;
+  display: none; align-items: center; gap: 2px;
+  padding: 5px 6px 5px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+#find.on { display: flex; }
+#find .find-icon { width: 15px; height: 15px; color: var(--faint); flex: none; margin-right: 5px; }
+#find input {
+  appearance: none; border: 0; outline: none; background: transparent;
+  color: var(--fg); font: inherit; font-size: 13.5px;
+  width: 190px; padding: 4px 2px;
+}
+#find input::placeholder { color: var(--faint); }
+#find-count {
+  font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+  min-width: 44px; text-align: right; padding-right: 4px; flex: none;
+}
+#find-count.none { color: #e5534b; }
+#find .btn { height: 26px; min-width: 26px; padding: 0 4px; }
+#find .btn svg { width: 15px; height: 15px; }
+
+#doc mark.findhit {
+  background: #ffe066; color: #1a1a1a;
+  padding: 0; border-radius: 2px;
+}
+#doc mark.findhit.current {
+  background: #ff9d2e; color: #16171a;
+  box-shadow: 0 0 0 2px rgba(255, 157, 46, .45);
+}
+
 /* ---------- settings ---------- */
 #settings {
   position: fixed; top: 48px; right: 10px; z-index: 120;

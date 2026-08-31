@@ -50,6 +50,11 @@ Installers land in `src-tauri/target/release/bundle/`. `npm run app:dev` runs it
 | **Serif mode** | Switch to a serif face for long reading. |
 | **Print** | `Ctrl`+`P` gives clean PDF output with sensible page breaks. |
 | **Code** | Syntax highlighting for ~40 common languages, hover a block to copy it. |
+| **Find** | `Ctrl`+`F` searches the document, with match counts and wrap-around navigation. The webview has no find of its own, so this is the only way to search in the app. |
+| **Front matter** | YAML/TOML blocks are stripped instead of rendering as a stray rule and a bogus heading. |
+| **Local images** | Relative image paths resolve against the document folder. |
+| **Links** | External links open in your real browser, not inside the app window. |
+| **Window** | Size and position are remembered between launches. |
 
 Opens files by drag-and-drop, the Open button, or pasting markdown straight from the clipboard. Reopens the last file you were reading on launch.
 
@@ -64,6 +69,9 @@ Opens files by drag-and-drop, the Open button, or pasting markdown straight from
 | `t` | Cycle theme |
 | `w` | Cycle reading width |
 | `f` | Toggle sans / serif |
+| `Ctrl` `F` | Find in document |
+| `F3` | Next match |
+| `F5` | Force reload from disk |
 | `,` | Open settings |
 | `Esc` | Close settings |
 | `Ctrl` `P` | Print or save as PDF |
