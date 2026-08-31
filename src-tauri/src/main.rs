@@ -47,6 +47,36 @@ fn initial_file(state: State<'_, InitialFile>) -> Option<String> {
     state.0.lock().ok()?.take()
 }
 
+/// Markdown files sitting next to `path`, sorted, so the frontend can offer
+/// next/previous navigation through a docs folder.
+#[tauri::command]
+fn sibling_files(path: String) -> Result<Vec<String>, String> {
+    const EXTS: [&str; 6] = ["md", "markdown", "mdown", "mkd", "mdx", "txt"];
+
+    let file = std::path::Path::new(&path);
+    let dir = file.parent().ok_or_else(|| "no parent directory".to_string())?;
+
+    let mut out: Vec<String> = std::fs::read_dir(dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            if !entry.file_type().ok()?.is_file() {
+                return None;
+            }
+            let p = entry.path();
+            let ext = p.extension()?.to_str()?.to_ascii_lowercase();
+            if !EXTS.contains(&ext.as_str()) {
+                return None;
+            }
+            Some(p.to_string_lossy().into_owned())
+        })
+        .collect();
+
+    // Case-insensitive so the order matches what a file manager shows.
+    out.sort_by_key(|s| s.to_lowercase());
+    Ok(out)
+}
+
 fn main() {
     let initial = first_file_arg(std::env::args());
 
@@ -69,7 +99,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             read_text_file,
             file_mtime,
-            initial_file
+            initial_file,
+            sibling_files
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Markdown Viewer");

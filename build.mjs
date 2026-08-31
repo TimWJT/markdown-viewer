@@ -17,6 +17,16 @@ const js = await build({
   write: false,
 });
 
+const mermaidBundle = await build({
+  entryPoints: [join(here, 'src/mermaid-entry.js')],
+  bundle: true,
+  minify: true,
+  format: 'iife',
+  target: ['chrome110', 'firefox110', 'safari16'],
+  legalComments: 'none',
+  write: false,
+});
+
 const css = await build({
   entryPoints: [join(here, 'src/app.css')],
   minify: true,
@@ -52,7 +62,10 @@ await writeFile(join(out, 'index.html'), external, 'utf8');
 await writeFile(join(out, 'app.css'), bundleCss, 'utf8');
 await writeFile(join(out, 'app.js'), bundleJs, 'utf8');
 await writeFile(join(out, OUT_NAME), inlined, 'utf8');
+await writeFile(join(out, 'mermaid.js'), mermaidBundle.outputFiles[0].text, 'utf8');
 
 const kb = (Buffer.byteLength(inlined, 'utf8') / 1024).toFixed(0);
 console.log(`built dist/  ->  index.html + app.css + app.js (packaged app)`);
+const mkb = (Buffer.byteLength(mermaidBundle.outputFiles[0].text, 'utf8') / 1024).toFixed(0);
 console.log(`              ->  ${OUT_NAME} (${kb} KB standalone, zero network)`);
+console.log(`              ->  mermaid.js (${mkb} KB, lazy-loaded by the packaged app only)`);

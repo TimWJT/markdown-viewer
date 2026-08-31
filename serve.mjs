@@ -18,15 +18,21 @@ const TYPES = {
 
 createServer(async (req, res) => {
   let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
-  if (path === '/') path = '/dist/Markdown Viewer.html';
-  const file = normalize(join(here, path));
-  if (!file.startsWith(here)) { res.writeHead(403).end('forbidden'); return; }
-  try {
-    const body = await readFile(file);
-    const ext = file.slice(file.lastIndexOf('.')).toLowerCase();
-    res.writeHead(200, { 'content-type': TYPES[ext] || 'application/octet-stream', 'cache-control': 'no-store' });
-    res.end(body);
-  } catch {
-    res.writeHead(404).end('not found');
+  if (path === '/') path = '/index.html';
+
+  /* dist/ first so app.js and mermaid.js resolve as the packaged app sees them
+     (siblings of index.html), then the project root for fixtures like sample.md */
+  const candidates = [normalize(join(here, 'dist', path)), normalize(join(here, path))];
+
+  for (const file of candidates) {
+    if (!file.startsWith(here)) continue;
+    try {
+      const body = await readFile(file);
+      const ext = file.slice(file.lastIndexOf('.')).toLowerCase();
+      res.writeHead(200, { 'content-type': TYPES[ext] || 'application/octet-stream', 'cache-control': 'no-store' });
+      res.end(body);
+      return;
+    } catch { /* try the next candidate */ }
   }
+  res.writeHead(404).end('not found');
 }).listen(PORT, () => console.log(`serving markdown-viewer on http://localhost:${PORT}`));
