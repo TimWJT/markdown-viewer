@@ -45,7 +45,7 @@
     "shortDescription": "A markdown viewer that gets out of the way",
     "longDescription": "Opens markdown files, renders them well, and lets you zoom and pan. No editor, no vault, no plugins. Live-reloads while you edit the file elsewhere.",
     "category": "Utility",
-    "copyright": "",
+    "copyright": "© 2026 Tim Wang",
     "licenseFile": "../LICENSE",
     "fileAssociations": [
       {
@@ -64,7 +64,9 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "./installer-hooks.nsh",
+        "startMenuFolder": "Markdown Viewer"
       }
     },
     "linux": {
@@ -74,6 +76,8 @@
           "libgtk-3-0"
         ]
       }
-    }
+    },
+    "publisher": "Tim Wang",
+    "homepage": "https://github.com/TimWJT/markdown-viewer"
   }
 }
