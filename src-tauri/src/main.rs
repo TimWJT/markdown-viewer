@@ -63,6 +63,8 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(InitialFile(Mutex::new(initial)))
         .invoke_handler(tauri::generate_handler![
             read_text_file,
