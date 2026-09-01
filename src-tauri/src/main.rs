@@ -77,6 +77,31 @@ fn sibling_files(path: String) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// WebView2 implements its own pinch-to-zoom at the browser level, which scales
+/// the entire UI — toolbar included — and swallows the gesture before the page
+/// can act on it. The app does its own zoom on the document only, so turn the
+/// built-in one off and let the frontend handle pinch.
+#[cfg(target_os = "windows")]
+fn disable_builtin_pinch_zoom(window: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings5;
+    use windows::core::Interface;
+
+    let result = window.with_webview(|webview| unsafe {
+        let controller = webview.controller();
+        if let Ok(core) = controller.CoreWebView2() {
+            if let Ok(settings) = core.Settings() {
+                if let Ok(settings5) = settings.cast::<ICoreWebView2Settings5>() {
+                    let _ = settings5.SetIsPinchZoomEnabled(false);
+                }
+            }
+        }
+    });
+
+    if let Err(e) = result {
+        eprintln!("could not reach the webview to disable pinch zoom: {e}");
+    }
+}
+
 fn main() {
     let initial = first_file_arg(std::env::args());
 
@@ -95,6 +120,13 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .setup(|_app| {
+            #[cfg(target_os = "windows")]
+            if let Some(window) = _app.get_webview_window("main") {
+                disable_builtin_pinch_zoom(&window);
+            }
+            Ok(())
+        })
         .manage(InitialFile(Mutex::new(initial)))
         .invoke_handler(tauri::generate_handler![
             read_text_file,

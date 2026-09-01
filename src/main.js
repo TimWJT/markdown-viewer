@@ -382,6 +382,65 @@ window.addEventListener('wheel', (e) => {
   zoomTo(scale * Math.exp(dir * e.deltaY * WHEEL_BASE * cfg.zoomSpeed), e.clientX, e.clientY);
 }, { passive: false, capture: true });
 
+/* ---------- pinch, the other ways it arrives ----------
+   ctrl+wheel above covers Chromium's synthesized trackpad pinch. Two more
+   paths exist and neither produces a wheel event:
+     - a touchscreen or touch-capable surface, which gives two pointers
+     - WebKit (macOS), which fires its own gesture* events
+   Both are handled here so pinch works wherever the app runs. */
+
+const livePointers = new Map();
+let pinchStartDist = 0;
+let pinchStartScale = 1;
+
+function pinchDistance() {
+  const [a, b] = [...livePointers.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+function pinchCentre() {
+  const [a, b] = [...livePointers.values()];
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+els.scroller.addEventListener('pointerdown', (e) => {
+  if (e.pointerType !== 'touch') return;
+  livePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (livePointers.size === 2) {
+    pinchStartDist = pinchDistance();
+    pinchStartScale = scale;
+  }
+}, { passive: true });
+
+els.scroller.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'touch' || !livePointers.has(e.pointerId)) return;
+  livePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (livePointers.size !== 2 || !pinchStartDist) return;
+  e.preventDefault();
+  cancelAnimationFrame(tween);
+  const c = pinchCentre();
+  zoomTo(pinchStartScale * (pinchDistance() / pinchStartDist), c.x, c.y);
+}, { passive: false });
+
+function dropPointer(e) {
+  if (livePointers.delete(e.pointerId) && livePointers.size < 2) pinchStartDist = 0;
+}
+els.scroller.addEventListener('pointerup', dropPointer, { passive: true });
+els.scroller.addEventListener('pointercancel', dropPointer, { passive: true });
+els.scroller.addEventListener('pointerleave', dropPointer, { passive: true });
+
+/* WebKit-only gesture events (macOS trackpads in a .app build) */
+let gestureStartScale = 1;
+window.addEventListener('gesturestart', (e) => {
+  e.preventDefault();
+  gestureStartScale = scale;
+}, { passive: false });
+window.addEventListener('gesturechange', (e) => {
+  e.preventDefault();
+  cancelAnimationFrame(tween);
+  zoomTo(gestureStartScale * e.scale, e.clientX, e.clientY);
+}, { passive: false });
+window.addEventListener('gestureend', (e) => e.preventDefault(), { passive: false });
+
 /* ---------- panning ---------- */
 /* Middle-drag or Alt+drag pans. Plain left-drag is left alone so that
    selecting text still works. Shift+wheel, trackpad swipes and the arrow
