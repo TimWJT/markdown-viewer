@@ -58,7 +58,8 @@ Installers land in `src-tauri/target/release/bundle/`. `npm run app:dev` runs it
 | **Math** | LaTeX renders via Temml to MathML, which the browser draws natively — no font files to ship. |
 | **Diagrams** | Mermaid diagrams render in the installed app (see the note below). |
 | **Footnotes** | GFM-style `[^1]` footnotes with back-references. |
-| **Recent files** | Dropdown beside Open, in the installed app. |
+| **Tabs** | Open documents sit in a tab strip, each keeping its own scroll position. The strip hides itself when only one document is open. |
+| **Tab or window** | A setting decides whether an opened file joins this window as a tab or gets a window of its own. |
 | **Folder navigation** | `[` and `]` step through the markdown files in the same folder. |
 | **Fit width** | One click scales the document to exactly fill the window. |
 | **Reading time** | Word count and estimated minutes in the toolbar. |
@@ -74,6 +75,9 @@ Opens files by drag-and-drop, the Open button, or pasting markdown straight from
 | `Ctrl` `0` | Reset zoom to 100% |
 | `Ctrl` `9` | Fit width |
 | `[` / `]` | Previous / next file in the folder |
+| `Ctrl` `Tab` | Next tab (`Shift` for previous) |
+| `Ctrl` `1`–`8` | Jump to tab |
+| `Ctrl` `W` | Close tab |
 | `o` | Toggle outline |
 | `t` | Cycle theme |
 | `w` | Cycle reading width |
@@ -95,6 +99,7 @@ The gear button (or `,`) opens a small panel. Everything applies live and persis
 | **Text size** | 17px | 13 – 26px |
 | **Line height** | 1.68 | 1.3 – 2.1 |
 | **Invert zoom direction** | off | scroll down zooms in |
+| **Open files in** | New tab | new tab / new window |
 
 Zoom speed scales the exponent applied to wheel deltas, so it affects both the mouse wheel and trackpad pinch proportionally — pinch stays smooth at any setting because it arrives as many small deltas. The panel shows the resulting per-notch percentage as you drag the slider.
 

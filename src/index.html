@@ -9,14 +9,11 @@
 </head>
 <body>
 
+<div id="chrome">
 <header id="bar">
   <button class="btn primary" id="btn-open" title="Open a markdown file (Ctrl+O)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
     Open
-  </button>
-
-  <button class="btn" id="btn-recent" title="Recent files" aria-pressed="false" aria-haspopup="menu">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
   </button>
 
   <button class="btn" id="btn-outline" title="Outline (o)" aria-pressed="false">
@@ -63,6 +60,9 @@
   </button>
 </header>
 
+<nav id="tabbar" aria-label="Open documents"></nav>
+</div>
+
 <div id="shell">
   <nav id="outline" aria-label="Document outline">
     <h4>Outline</h4>
@@ -92,8 +92,6 @@
   </div>
 </div>
 
-<div id="recent" role="menu" aria-label="Recent files"></div>
-
 <div id="find" role="search" aria-label="Find in document">
   <svg class="find-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
   <input type="text" id="find-input" placeholder="Find" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search text">
@@ -114,6 +112,15 @@
     <label for="cfg-zoomspeed">Zoom speed <b id="cfg-zoomspeed-val">1.0&times;</b></label>
     <input type="range" id="cfg-zoomspeed" min="0.25" max="4" step="0.05" value="1">
     <small id="cfg-zoomspeed-hint">about 25% per wheel notch</small>
+  </div>
+
+  <div class="field">
+    <label>Open files in</label>
+    <div class="seg" id="cfg-openin" role="radiogroup" aria-label="Open files in">
+      <button type="button" data-val="tab" role="radio" aria-checked="true">New tab</button>
+      <button type="button" data-val="window" role="radio" aria-checked="false">New window</button>
+    </div>
+    <small id="cfg-openin-hint">Files you open join this window as tabs</small>
   </div>
 
   <div class="field">

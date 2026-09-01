@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions the viewer window needs: the open dialog, window title updates, and the drag-drop / open-file events.",
+  "description": "Permissions for the viewer windows: the open dialog, window title/focus, spawning a window per document, and the drag-drop / open-file events.",
   "windows": [
-    "main"
+    "main",
+    "doc-*"
   ],
   "permissions": [
     "core:default",
@@ -13,6 +14,8 @@
     "core:window:allow-unminimize",
     "dialog:allow-open",
     "opener:allow-open-url",
-    "window-state:default"
+    "window-state:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-close"
   ]
 }
