@@ -7,6 +7,7 @@ import hljs from 'highlight.js/lib/common';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
@@ -130,6 +131,7 @@ const $ = (s) => document.querySelector(s);
 
 const els = {
   bar: $('#bar'),
+  chrome: $('#chrome'),
   title: $('#title'),
   live: $('#live'),
   doc: $('#doc'),
@@ -144,7 +146,37 @@ const els = {
   fileInput: $('#file-input'),
 };
 
-const state = { name: '', path: null, handle: null, pending: null, lastModified: 0, heads: [] };
+/* ======================================================================
+   Tabs
+   ----------------------------------------------------------------------
+   Each open document is a tab holding its own source text, watch state and
+   scroll position. `state` always points at the active one, so the rest of
+   the app keeps reading state.path / state.name as before. Switching tabs
+   re-renders from the stored text rather than keeping a DOM per tab —
+   simpler, and fast enough for documents this size.
+   ====================================================================== */
+
+let tabs = [];
+let tabSeq = 0;
+
+function makeTab(init) {
+  return Object.assign({
+    id: ++tabSeq,
+    name: '',
+    path: null,      // native path, when opened through the shell
+    handle: null,    // FileSystemFileHandle, when opened in a browser
+    text: '',
+    lastModified: 0,
+    docDir: null,
+    scrollTop: 0,
+    scrollLeft: 0,
+    heads: [],
+    pending: null,
+  }, init);
+}
+
+/* A placeholder until something is opened, so `state.x` is always safe. */
+let state = makeTab({});
 
 /* True only inside the Tauri shell. In a plain browser every file path below
    falls back to the web APIs. */
@@ -191,7 +223,7 @@ async function idbGet(k) {
    is deltaY 100, so 0.0022 lands on ~25% per notch — roughly a browser step.
    Trackpad pinch arrives as many small deltas and stays smooth at any speed. */
 const WHEEL_BASE = 0.0022;
-const DEFAULTS = { zoomSpeed: 1, textSize: 17, lineHeight: 1.68, invertZoom: false };
+const DEFAULTS = { zoomSpeed: 1, textSize: 17, lineHeight: 1.68, invertZoom: false, openIn: 'tab' };
 let cfg = Object.assign({}, DEFAULTS, store.get('cfg', {}) || {});
 
 /** % change a single mouse-wheel notch produces at the current speed. */
@@ -204,6 +236,7 @@ function applyCfg({ remeasure = true, save = true } = {}) {
   cfg.textSize = Math.min(26, Math.max(13, Number(cfg.textSize) || 17));
   cfg.lineHeight = Math.min(2.1, Math.max(1.3, Number(cfg.lineHeight) || 1.68));
   cfg.invertZoom = !!cfg.invertZoom;
+  cfg.openIn = cfg.openIn === 'window' ? 'window' : 'tab';
 
   root.style.setProperty('--base-size', cfg.textSize + 'px');
   root.style.setProperty('--line-height', String(cfg.lineHeight));
@@ -212,6 +245,10 @@ function applyCfg({ remeasure = true, save = true } = {}) {
   $('#cfg-textsize').value = String(cfg.textSize);
   $('#cfg-lineheight').value = String(cfg.lineHeight);
   $('#cfg-invert').checked = cfg.invertZoom;
+  $('#cfg-openin').querySelectorAll('button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.val === cfg.openIn)));
+  $('#cfg-openin-hint').textContent = cfg.openIn === 'window'
+    ? 'Each file you open gets its own window'
+    : 'Files you open join this window as tabs';
   $('#cfg-zoomspeed-val').textContent = cfg.zoomSpeed.toFixed(2).replace(/0$/, '') + '×';
   $('#cfg-zoomspeed-hint').textContent = 'about ' + notchPercent() + '% per wheel notch';
   $('#cfg-textsize-val').textContent = cfg.textSize + 'px';
@@ -225,7 +262,7 @@ function toggleSettings(force) {
   const on = force ?? !$('#settings').classList.contains('on');
   $('#settings').classList.toggle('on', on);
   $('#btn-settings').setAttribute('aria-pressed', String(on));
-  if (on) els.bar.classList.remove('hidden');
+  if (on) els.chrome.classList.remove('hidden');
 }
 
 /* ---------- toast ---------- */
@@ -264,15 +301,28 @@ let lastAvail = -1;
 
 function measure() {
   if (measuring) return;
+  const avail = els.scroller.clientWidth;
+
+  /* A window that is hidden, minimised or still being shown lays out at zero
+     width. Caching that would leave the document stuck at a few pixels with
+     nothing to re-trigger it, so try again instead — requestAnimationFrame is
+     suspended while hidden and fires as soon as the window appears. */
+  if (!avail) { scheduleMeasure(); return; }
+
   measuring = true;
-  lastAvail = els.scroller.clientWidth;
+  lastAvail = avail;
   els.doc.style.transform = 'none';
-  els.doc.style.width = lastAvail + 'px';
+  els.doc.style.width = avail + 'px';
   natW = els.doc.offsetWidth;
   natH = els.doc.offsetHeight;
   measuring = false;
   paint();
 }
+
+/* Belt and braces for the same problem: re-measure whenever the window
+   becomes visible or finishes loading. */
+document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleMeasure(); });
+window.addEventListener('load', () => scheduleMeasure());
 
 /** Apply the current scale. Cheap: no layout reads. */
 function paint() {
@@ -510,9 +560,6 @@ function stripFrontMatter(text) {
   return text.replace(FRONT_MATTER, '');
 }
 
-/* Directory of the open document, so relative image paths can resolve. */
-let docDir = null;
-
 function joinPath(dir, rel) {
   const sep = dir.includes('\\') ? '\\' : '/';
   /* Keep a leading empty segment (POSIX "/a/b") but drop trailing/interior
@@ -533,13 +580,13 @@ function isAbsolutePath(p) {
 /* Rewrite relative <img src> through Tauri's asset protocol; without this a
    README that embeds ./screenshot.png just shows a broken image. */
 function resolveImages() {
-  if (!IS_TAURI || !docDir) return;
+  if (!IS_TAURI || !state.docDir) return;
   els.doc.querySelectorAll('img[src]').forEach((img) => {
     const raw = img.getAttribute('src') || '';
     if (!raw || /^(https?:|data:|blob:|asset:|tauri:|file:)/i.test(raw)) return;
     let rel = raw;
     try { rel = decodeURIComponent(raw); } catch {}
-    const abs = isAbsolutePath(rel) ? rel : joinPath(docDir, rel);
+    const abs = isAbsolutePath(rel) ? rel : joinPath(state.docDir, rel);
     try { img.src = convertFileSrc(abs); } catch {}
   });
 }
@@ -665,9 +712,11 @@ function buildOutline() {
 }
 
 /* ---------- document lifecycle ---------- */
+/** Replace the active tab's content in place — used by live reload. */
 function setDoc(text, resetScroll) {
   const keep = resetScroll ? 0 : els.scroller.scrollTop;
   const keepLeft = resetScroll ? 0 : els.scroller.scrollLeft;
+  state.text = text;
   render(text);
   els.empty.classList.add('gone');
   els.scroller.classList.add('instant');
@@ -689,6 +738,7 @@ function updateTitle() {
   if (!state.name) {
     els.title.textContent = '';
     document.title = 'Markdown Viewer';
+    if (IS_TAURI) getCurrentWindow().setTitle(document.title).catch(() => {});
     return;
   }
   els.title.innerHTML = '';
@@ -704,19 +754,45 @@ function updateTitle() {
     els.title.style.cursor = 'default';
   }
   document.title = state.name + ' — Markdown Viewer';
+  /* document.title does not drive the OS titlebar in a native window */
+  if (IS_TAURI) {
+    getCurrentWindow().setTitle(document.title).catch(() => {});
+  }
 }
 
+/** Browser path: a File (and optionally a handle) rather than a native path. */
 async function loadFile(file, handle) {
   const text = await file.text();
-  state.name = file.name;
-  state.lastModified = file.lastModified;
-  state.handle = handle || null;
-  state.path = null;
-  docDir = null;
-  state.pending = null;
-  setDoc(text, true);
-  startWatch();
+  const existing = tabs.find((t) => !t.path && t.name === file.name);
+  if (existing) {
+    existing.text = text;
+    existing.lastModified = file.lastModified;
+    existing.handle = handle || null;
+    activateTab(existing.id);
+    if (state.id === existing.id) showActiveTab();
+    return;
+  }
+  const tab = makeTab({
+    name: file.name,
+    text,
+    lastModified: file.lastModified,
+    handle: handle || null,
+  });
+  tabs.push(tab);
+  stashScroll();
+  state = tab;
+  showActiveTab();
   els.scroller.focus({ preventScroll: true });
+}
+
+/** Clipboard content becomes its own tab, numbered so they stay tellable apart. */
+function loadPasted(text) {
+  const taken = tabs.filter((t) => /^Pasted text/.test(t.name)).length;
+  const tab = makeTab({ name: taken ? `Pasted text ${taken + 1}` : 'Pasted text', text });
+  tabs.push(tab);
+  stashScroll();
+  state = tab;
+  showActiveTab();
 }
 
 async function openHandle(h) {
@@ -730,25 +806,70 @@ async function openHandle(h) {
 }
 
 /* ---------- native (Tauri) file handling ---------- */
-async function openPath(path) {
+
+/** Directory of a document, for resolving relative image paths. */
+function dirOf(path, name) {
+  let dir = path.slice(0, Math.max(0, path.length - name.length - 1)) || null;
+  if (dir && /^[a-zA-Z]:$/.test(dir)) dir += '\\';
+  return dir;
+}
+
+/**
+ * Open a file by native path.
+ *
+ * `allowNewWindow` is what makes the "open files in" setting work: an
+ * externally-triggered open (file association, drag-drop, the Open dialog)
+ * may spawn its own window, whereas restoring tabs at startup must not.
+ */
+async function openPath(path, { allowNewWindow = true } = {}) {
+  /* already open? just go to it — never open the same file twice */
+  const existing = tabs.find((t) => t.path && t.path.toLowerCase() === path.toLowerCase());
+  if (existing) {
+    activateTab(existing.id);
+    try { await getCurrentWindow().setFocus(); } catch {}
+    return;
+  }
+
+  if (allowNewWindow && IS_TAURI && cfg.openIn === 'window' && tabs.length > 0) {
+    await openInNewWindow(path);
+    return;
+  }
+
   const text = await invoke('read_text_file', { path });
   let mtime = 0;
   try { mtime = await invoke('file_mtime', { path }); } catch {}
-  state.name = path.split(/[\\/]/).pop() || path;
-  state.path = path;
-  /* Directory of this document — relative image paths resolve against it. */
-  docDir = path.slice(0, Math.max(0, path.length - state.name.length - 1)) || null;
-  if (docDir && /^[a-zA-Z]:$/.test(docDir)) docDir += '\\';
-  state.handle = null;
-  state.pending = null;
-  state.lastModified = mtime;
+
+  const name = baseName(path);
+  const tab = makeTab({ name, path, text, lastModified: mtime, docDir: dirOf(path, name) });
+  tabs.push(tab);
+  stashScroll();
+  state = tab;
   store.set('lastPath', path);
-  pushRecent(path);
-  toggleRecent(false); /* otherwise the menu lingers, listing the file just opened */
-  setDoc(text, true);
-  startWatch();
-  try { await getCurrentWindow().setTitle(state.name + ' — Markdown Viewer'); } catch {}
+  showActiveTab();
   els.scroller.focus({ preventScroll: true });
+}
+
+/** Spawn a second app window already showing `path`. */
+async function openInNewWindow(path) {
+  try {
+    const label = 'doc-' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
+    const w = new WebviewWindow(label, {
+      url: 'index.html?file=' + encodeURIComponent(path),
+      title: baseName(path) + ' — Markdown Viewer',
+      width: 1100,
+      height: 820,
+      dragDropEnabled: true,
+    });
+    await new Promise((resolve, reject) => {
+      w.once('tauri://created', resolve);
+      w.once('tauri://error', reject);
+      setTimeout(resolve, 3000);
+    });
+  } catch (err) {
+    toast('Could not open a new window');
+    /* fall back to a tab rather than losing the file entirely */
+    await openPath(path, { allowNewWindow: false });
+  }
 }
 
 async function openViaPicker() {
@@ -796,6 +917,12 @@ function stopWatch() {
   watchTimer = null;
   watchFails = 0;
   els.live.classList.remove('on');
+  markActiveTabWatching(false);
+}
+
+function markActiveTabWatching(on) {
+  const el = $('#tabbar .tab[aria-selected="true"]');
+  if (el) el.dataset.watching = on ? 'yes' : 'no';
 }
 
 function onWatchError() {
@@ -839,9 +966,11 @@ function startWatch() {
   stopWatch();
   if (IS_TAURI && state.path) {
     els.live.classList.add('on');
+    markActiveTabWatching(true);
     watchTimer = setInterval(pollNative, WATCH_INTERVAL);
   } else if (state.handle) {
     els.live.classList.add('on');
+    markActiveTabWatching(true);
     watchTimer = setInterval(pollHandle, WATCH_INTERVAL);
   }
 }
@@ -976,7 +1105,7 @@ function findStep(dir) {
 function openFind() {
   $('#find').classList.add('on');
   $('#btn-find').setAttribute('aria-pressed', 'true');
-  els.bar.classList.remove('hidden');
+  els.chrome.classList.remove('hidden');
   const input = $('#find-input');
   input.focus();
   input.select();
@@ -1002,60 +1131,118 @@ $('#find-close').addEventListener('click', closeFind);
 $('#btn-find').addEventListener('click', (e) => { e.stopPropagation(); findBarOpen() ? closeFind() : openFind(); });
 $('#find').addEventListener('click', (e) => e.stopPropagation());
 
-/* ======================================================================
-   Recent files and folder navigation (native shell only — a browser cannot
-   reopen a path it was never granted access to).
-   ====================================================================== */
-
-const RECENT_MAX = 10;
-
-function pushRecent(path) {
-  if (!IS_TAURI || !path) return;
-  const list = (store.get('recent', []) || []).filter((p) => p !== path);
-  list.unshift(path);
-  store.set('recent', list.slice(0, RECENT_MAX));
-}
-
 function baseName(p) { return p.split(/[\\/]/).pop() || p; }
 
-function buildRecentMenu() {
-  const menu = $('#recent');
-  menu.innerHTML = '';
-  const list = (store.get('recent', []) || []).filter((p) => p !== state.path);
-  if (!list.length) {
-    const d = document.createElement('div');
-    d.className = 'recent-empty';
-    d.textContent = 'No recent files';
-    menu.appendChild(d);
+/* ---------- tab bar ---------- */
+const CLOSE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+
+function renderTabs() {
+  root.setAttribute('data-tabs', tabs.length > 1 ? 'many' : 'one');
+  const bar = $('#tabbar');
+  bar.innerHTML = '';
+
+  for (const t of tabs) {
+    const el = document.createElement('div');
+    el.className = 'tab';
+    el.setAttribute('role', 'tab');
+    el.setAttribute('aria-selected', String(t.id === state.id));
+    el.dataset.watching = t.id === state.id && watchTimer ? 'yes' : 'no';
+    el.title = t.path || t.name;
+
+    const dot = document.createElement('span');
+    dot.className = 'tab-dot';
+
+    const name = document.createElement('span');
+    name.className = 'tab-name';
+    name.textContent = t.name || 'Untitled';
+
+    const close = document.createElement('button');
+    close.className = 'tab-close';
+    close.type = 'button';
+    close.setAttribute('aria-label', `Close ${t.name}`);
+    close.innerHTML = CLOSE_ICON;
+    close.addEventListener('click', (e) => { e.stopPropagation(); closeTab(t.id); });
+
+    el.append(dot, name, close);
+    el.addEventListener('click', () => activateTab(t.id));
+    el.addEventListener('auxclick', (e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } });
+    bar.appendChild(el);
+  }
+
+  const active = bar.querySelector('.tab[aria-selected="true"]');
+  active?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+/** Remember where we were before leaving a tab. */
+function stashScroll() {
+  if (!state.id) return;
+  state.scrollTop = els.scroller.scrollTop;
+  state.scrollLeft = els.scroller.scrollLeft;
+}
+
+function activateTab(id) {
+  if (id === state.id) return;
+  const next = tabs.find((t) => t.id === id);
+  if (!next) return;
+  stashScroll();
+  state = next;
+  showActiveTab();
+}
+
+function showActiveTab() {
+  render(state.text);
+  els.empty.classList.add('gone');
+  els.scroller.classList.add('instant');
+  els.scroller.scrollTop = state.scrollTop;
+  els.scroller.scrollLeft = state.scrollLeft;
+  requestAnimationFrame(() => els.scroller.classList.remove('instant'));
+  updateTitle();
+  startWatch();
+  renderTabs();
+  syncOutlineActive();
+  persistTabs();
+  if (findBarOpen()) runFind($('#find-input').value, false);
+}
+
+function closeTab(id) {
+  const i = tabs.findIndex((t) => t.id === id);
+  if (i === -1) return;
+  const wasActive = tabs[i].id === state.id;
+  tabs.splice(i, 1);
+
+  if (!tabs.length) {
+    stopWatch();
+    state = makeTab({});
+    els.doc.innerHTML = '';
+    els.empty.classList.remove('gone');
+    els.outlineList.innerHTML = '';
+    $('#docmeta').textContent = '';
+    updateTitle();
+    renderTabs();
+    persistTabs();
     return;
   }
-  for (const p of list) {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'recent-item';
-    const name = document.createElement('b');
-    name.textContent = baseName(p);
-    const dir = document.createElement('span');
-    dir.textContent = p.slice(0, Math.max(0, p.length - baseName(p).length - 1));
-    item.append(name, dir);
-    item.title = p;
-    item.addEventListener('click', () => {
-      toggleRecent(false);
-      openPath(p).catch(() => {
-        toast('File no longer available');
-        store.set('recent', (store.get('recent', []) || []).filter((x) => x !== p));
-      });
-    });
-    menu.appendChild(item);
+  if (wasActive) {
+    state = tabs[Math.min(i, tabs.length - 1)];
+    showActiveTab();
+  } else {
+    renderTabs();
+    persistTabs();
   }
 }
 
-function toggleRecent(force) {
-  const on = force ?? !$('#recent').classList.contains('on');
-  if (on) buildRecentMenu();
-  $('#recent').classList.toggle('on', on);
-  $('#btn-recent').setAttribute('aria-pressed', String(on));
-  if (on) els.bar.classList.remove('hidden');
+function stepTab(dir) {
+  if (tabs.length < 2) return;
+  const i = tabs.findIndex((t) => t.id === state.id);
+  activateTab(tabs[(i + dir + tabs.length) % tabs.length].id);
+}
+
+/** Only the original window owns the restore list; extra windows would fight. */
+let isMainWindow = true;
+
+function persistTabs() {
+  if (!IS_TAURI || !isMainWindow) return;
+  store.set('openTabs', tabs.map((t) => t.path).filter(Boolean));
 }
 
 /** Step to the next/previous markdown file sitting in the same folder. */
@@ -1142,15 +1329,15 @@ function syncOutlineActive() {
 
 els.scroller.addEventListener('scroll', () => {
   const y = els.scroller.scrollTop;
-  els.bar.classList.toggle('scrolled', y > 4);
-  if (y > 90 && y > lastScroll + 6) els.bar.classList.add('hidden');
-  else if (y < lastScroll - 6 || y <= 90) els.bar.classList.remove('hidden');
+  els.chrome.classList.toggle('scrolled', y > 4);
+  if (y > 90 && y > lastScroll + 6) els.chrome.classList.add('hidden');
+  else if (y < lastScroll - 6 || y <= 90) els.chrome.classList.remove('hidden');
   lastScroll = y;
   syncOutlineActive();
 }, { passive: true });
 
 window.addEventListener('mousemove', (e) => {
-  if (e.clientY < 56) els.bar.classList.remove('hidden');
+  if (e.clientY < 56) els.chrome.classList.remove('hidden');
 });
 
 /* ---------- keyboard ---------- */
@@ -1159,7 +1346,6 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (findBarOpen()) { closeFind(); return; }
     toggleSettings(false);
-    toggleRecent(false);
     els.scroller.focus({ preventScroll: true });
     return;
   }
@@ -1174,6 +1360,14 @@ window.addEventListener('keydown', (e) => {
   if (mod && e.key === '9') { e.preventDefault(); zoomFitWidth(); return; }
   if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); openViaPicker(); return; }
   if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); openFind(); return; }
+  if (mod && e.key.toLowerCase() === 'w') { e.preventDefault(); if (state.id) closeTab(state.id); return; }
+  if (mod && e.key === 'Tab') { e.preventDefault(); stepTab(e.shiftKey ? -1 : 1); return; }
+  if (mod && /^[1-8]$/.test(e.key)) {
+    e.preventDefault();
+    const t = tabs[Number(e.key) - 1];
+    if (t) activateTab(t.id);
+    return;
+  }
   if (e.key === 'F3') { e.preventDefault(); findBarOpen() ? findStep(e.shiftKey ? -1 : 1) : openFind(); return; }
   if (e.key === 'F5' || (mod && e.key.toLowerCase() === 'r')) { e.preventDefault(); reloadNow(); return; }
   if (mod) return;
@@ -1231,12 +1425,7 @@ window.addEventListener('paste', (e) => {
   if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
   const text = e.clipboardData?.getData('text/plain');
   if (!text || !text.trim()) return;
-  stopWatch();
-  state.name = 'Pasted text';
-  state.handle = null;
-  state.path = null;
-  state.pending = null;
-  setDoc(text, true);
+  loadPasted(text);
   toast('Rendered from clipboard');
 });
 
@@ -1252,8 +1441,6 @@ $('#btn-font').addEventListener('click', () => applyFont(font === 'sans' ? 'seri
 $('#btn-print').addEventListener('click', () => window.print());
 $('#btn-settings').addEventListener('click', (e) => { e.stopPropagation(); toggleSettings(); });
 $('#btn-fit').addEventListener('click', zoomFitWidth);
-$('#btn-recent').addEventListener('click', (e) => { e.stopPropagation(); toggleRecent(); });
-$('#recent').addEventListener('click', (e) => e.stopPropagation());
 
 /* settings controls — live, no apply button */
 const bindRange = (id, key) => {
@@ -1269,13 +1456,19 @@ $('#cfg-invert').addEventListener('change', (e) => {
   cfg.invertZoom = e.target.checked;
   applyCfg({ remeasure: false });
 });
+$('#cfg-openin').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-val]');
+  if (!btn) return;
+  cfg.openIn = btn.dataset.val;
+  applyCfg({ remeasure: false });
+});
 $('#cfg-reset').addEventListener('click', () => {
   cfg = Object.assign({}, DEFAULTS);
   applyCfg();
   toast('Settings reset');
 });
 $('#settings').addEventListener('click', (e) => e.stopPropagation());
-document.addEventListener('click', () => { toggleSettings(false); toggleRecent(false); });
+document.addEventListener('click', () => toggleSettings(false));
 $('#empty-open').addEventListener('click', openViaPicker);
 els.title.addEventListener('click', async () => {
   if (state.pending && !state.handle) { try { await openHandle(state.pending); } catch {} }
@@ -1287,7 +1480,6 @@ els.fileInput.addEventListener('change', async () => {
 });
 
 /* ---------- boot ---------- */
-if (!IS_TAURI) $('#btn-recent').style.display = 'none';
 applyCfg({ remeasure: false, save: false });
 applyTheme(theme, false);
 applyWidth(width, false);
@@ -1296,26 +1488,48 @@ applyOutline(outlineOn, false);
 paint();
 
 (async function boot() {
+  renderTabs();
+
+  if (IS_TAURI) {
+    /* A window spawned by "open in new window" is told which file to show and
+       must not touch the saved tab set — that belongs to the original window. */
+    let label = 'main';
+    try { label = getCurrentWindow().label; } catch {}
+    isMainWindow = label === 'main';
+
+    const requested = new URLSearchParams(location.search).get('file');
+    if (requested) {
+      try { await openPath(requested, { allowNewWindow: false }); }
+      catch { toast('Could not open that file'); }
+      els.scroller.focus({ preventScroll: true });
+      return;
+    }
+
+    /* a file passed on the command line wins over the restored session */
+    let initial = null;
+    try { initial = await invoke('initial_file'); } catch {}
+
+    const saved = isMainWindow ? (store.get('openTabs', []) || []) : [];
+    for (const p of saved) {
+      if (initial && p.toLowerCase() === initial.toLowerCase()) continue;
+      try { await openPath(p, { allowNewWindow: false }); } catch { /* moved or deleted */ }
+    }
+    if (initial) {
+      try { await openPath(initial, { allowNewWindow: false }); } catch { toast('Could not open that file'); }
+    }
+    if (!tabs.length) persistTabs();
+    els.scroller.focus({ preventScroll: true });
+    return;
+  }
+
+  /* browser: restore the last rendered text so the page is not blank */
   const lastText = store.get('lastText', null);
   const lastName = store.get('lastName', '');
   if (lastText) {
-    state.name = lastName || 'Untitled.md';
-    render(lastText);
-    els.empty.classList.add('gone');
-    updateTitle();
-  }
-  /* native shell: a file passed on the command line wins, then the last one */
-  if (IS_TAURI) {
-    try {
-      const initial = await invoke('initial_file');
-      if (initial) { await openPath(initial); return; }
-    } catch {}
-    const lastPath = store.get('lastPath', null);
-    if (lastPath) {
-      try { await openPath(lastPath); } catch { store.set('lastPath', null); }
-    }
-    els.scroller.focus({ preventScroll: true });
-    return;
+    const tab = makeTab({ name: lastName || 'Untitled.md', text: lastText });
+    tabs.push(tab);
+    state = tab;
+    showActiveTab();
   }
 
   try {
