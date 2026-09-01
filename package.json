@@ -1,6 +1,6 @@
 {
   "name": "markdown-viewer",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A markdown viewer that gets out of the way",
   "main": "index.js",
   "scripts": {
