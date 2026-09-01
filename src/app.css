@@ -186,6 +186,9 @@ body {
   overflow: auto;
   overscroll-behavior: contain;
   scroll-behavior: smooth;
+  /* Allow one-finger scrolling but keep pinch for us — without this the
+     browser zooms the whole page and the gesture never reaches the script. */
+  touch-action: pan-x pan-y;
 }
 #scroller.instant { scroll-behavior: auto; }
 #scroller.panning { cursor: grabbing; user-select: none; scroll-behavior: auto; }
