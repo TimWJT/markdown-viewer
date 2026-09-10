@@ -458,6 +458,19 @@ h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor { opacity
 }
 #toast.on { opacity: 1; transform: translate(-50%, 0); }
 
+/* Same perch as the toast, but it waits for a click instead of timing out. */
+#update {
+  position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 14px);
+  display: none; align-items: center; gap: 10px;
+  background: var(--bg); color: var(--fg-strong);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 9px 10px 9px 15px; font-size: 13px; font-weight: 500;
+  opacity: 0; transition: opacity .18s, transform .18s; z-index: 201;
+  box-shadow: var(--shadow);
+}
+#update.on { display: flex; opacity: 1; transform: translate(-50%, 0); }
+#update .btn { height: 28px; padding: 0 12px; font-size: 12.5px; }
+
 @media (max-width: 760px) {
   #doc { padding: 28px 20px 40vh; }
   :root[data-outline="on"] #outline { position: fixed; z-index: 60; background: var(--bg); box-shadow: var(--shadow); }
@@ -465,7 +478,7 @@ h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor { opacity
 }
 
 @media print {
-  #bar, #outline, #empty, #drop, #toast { display: none !important; }
+  #bar, #outline, #empty, #drop, #toast, #update { display: none !important; }
   body, #shell, #stage, #scroller { overflow: visible; height: auto; position: static; }
   #shell { padding-top: 0; }
   #canvas { width: auto !important; height: auto !important; }

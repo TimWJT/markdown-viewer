@@ -9,6 +9,9 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { check as checkUpdate } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { getVersion } from '@tauri-apps/api/app';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
 import markedFootnote from 'marked-footnote';
@@ -277,6 +280,101 @@ function toast(msg) {
   els.toast.classList.add('on');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => els.toast.classList.remove('on'), 1600);
+}
+
+
+/* ======================================================================
+   Updater
+   ----------------------------------------------------------------------
+   Tauri's updater plugin fetches latest.json from the GitHub release, checks
+   its minisign signature against the pubkey baked into tauri.conf.json, and
+   swaps the installer in place. Everything below is just the UI around it:
+   a quiet check on launch and a bar you can dismiss. Nothing installs
+   without a click.
+
+   Only the main window checks — extra document windows share the install,
+   so prompting in each of them would just be noise.
+   ====================================================================== */
+
+const UPDATE_EVERY = 6 * 60 * 60 * 1000;   /* at most one silent check per 6h */
+let pendingUpdate = null;                   /* the Update handle, once found */
+let updateBusy = false;
+
+function showUpdateBar(version) {
+  $('#update-text').textContent = `Version ${version} is available`;
+  $('#update').classList.add('on');
+}
+
+function hideUpdateBar() {
+  $('#update').classList.remove('on');
+}
+
+/**
+ * @param manual  true when the user pressed the settings button, which makes
+ *                the "you are up to date" and error cases worth reporting.
+ */
+async function checkForUpdate({ manual = false } = {}) {
+  if (!IS_TAURI) {
+    if (manual) toast('Updates are only available in the desktop app');
+    return;
+  }
+  if (updateBusy) return;
+
+  if (!manual) {
+    const last = store.get('updateCheckedAt', 0) || 0;
+    if (Date.now() - last < UPDATE_EVERY) return;
+  }
+
+  if (manual) $('#cfg-update-hint').textContent = 'Checking…';
+  updateBusy = true;
+  try {
+    const found = await checkUpdate();
+    store.set('updateCheckedAt', Date.now());
+    if (found) {
+      pendingUpdate = found;
+      /* A version the user already said no to stays dismissed until the next one. */
+      if (manual || store.get('updateSkipped', '') !== found.version) {
+        showUpdateBar(found.version);
+      }
+      $('#cfg-update-hint').textContent = `Version ${found.version} is ready to install`;
+    } else {
+      pendingUpdate = null;
+      $('#cfg-update-hint').textContent = 'You are on the latest version';
+      if (manual) toast('You are on the latest version');
+    }
+  } catch (err) {
+    $('#cfg-update-hint').textContent = 'Could not reach the update server';
+    if (manual) toast('Could not check for updates');
+  } finally {
+    updateBusy = false;
+  }
+}
+
+async function installUpdate() {
+  if (!pendingUpdate || updateBusy) return;
+  updateBusy = true;
+  const btn = $('#update-go');
+  btn.disabled = true;
+
+  let total = 0;
+  let got = 0;
+  try {
+    await pendingUpdate.downloadAndInstall((e) => {
+      if (e.event === 'Started') { total = e.data.contentLength || 0; got = 0; btn.textContent = 'Downloading…'; }
+      else if (e.event === 'Progress') {
+        got += e.data.chunkLength || 0;
+        btn.textContent = total ? `${Math.round((got / total) * 100)}%` : 'Downloading…';
+      } else if (e.event === 'Finished') { btn.textContent = 'Installing…'; }
+    });
+    /* Windows hands off to the installer and exits on its own; elsewhere we
+       restart into the new build ourselves. */
+    await relaunch();
+  } catch (err) {
+    toast('Update failed — try downloading it from the releases page');
+    btn.disabled = false;
+    btn.textContent = 'Update';
+    updateBusy = false;
+  }
 }
 
 /* ======================================================================
@@ -1498,6 +1596,12 @@ $('#cfg-closescope').addEventListener('click', (e) => {
   cfg.closeScope = btn.dataset.val;
   applyCfg({ remeasure: false });
 });
+$('#cfg-check').addEventListener('click', () => checkForUpdate({ manual: true }));
+$('#update-go').addEventListener('click', installUpdate);
+$('#update-later').addEventListener('click', () => {
+  if (pendingUpdate) store.set('updateSkipped', pendingUpdate.version);
+  hideUpdateBar();
+});
 $('#cfg-reset').addEventListener('click', () => {
   cfg = Object.assign({}, DEFAULTS);
   applyCfg();
@@ -1582,3 +1686,15 @@ paint();
   } catch {}
   els.scroller.focus({ preventScroll: true });
 })();
+
+/* Version label and the launch update check live outside boot() so its early
+   returns cannot skip them, and run late so they never compete with first
+   paint. Only the main window prompts; document windows share the install. */
+if (IS_TAURI) {
+  getVersion().then((v) => { $('#cfg-version').textContent = 'v' + v; }).catch(() => {});
+  let bootLabel = 'main';
+  try { bootLabel = getCurrentWindow().label; } catch {}
+  if (bootLabel === 'main') setTimeout(() => { checkForUpdate(); }, 3000);
+} else {
+  $('#cfg-update').style.display = 'none';
+}
