@@ -76,8 +76,10 @@ Opens files by drag-and-drop, the Open button, or pasting markdown straight from
 | `Ctrl` `9` | Fit width |
 | `[` / `]` | Previous / next file in the folder |
 | `Ctrl` `Tab` | Next tab (`Shift` for previous) |
+| `Ctrl` `PgDn` / `Ctrl` `PgUp` | Next / previous tab |
 | `Ctrl` `1`–`8` | Jump to tab |
-| `Ctrl` `W` | Close tab |
+| `Ctrl` `W` | Close tab, or the whole window — see settings |
+| `Ctrl` `Shift` `W` | Close the window and all its tabs |
 | `o` | Toggle outline |
 | `t` | Cycle theme |
 | `w` | Cycle reading width |
@@ -100,6 +102,7 @@ The gear button (or `,`) opens a small panel. Everything applies live and persis
 | **Line height** | 1.68 | 1.3 – 2.1 |
 | **Invert zoom direction** | off | scroll down zooms in |
 | **Open files in** | New tab | new tab / new window |
+| **Ctrl+W closes** | This tab | this tab / all tabs |
 
 Zoom speed scales the exponent applied to wheel deltas, so it affects both the mouse wheel and trackpad pinch proportionally — pinch stays smooth at any setting because it arrives as many small deltas. The panel shows the resulting per-notch percentage as you drag the slider.
 

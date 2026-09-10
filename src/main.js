@@ -223,7 +223,7 @@ async function idbGet(k) {
    is deltaY 100, so 0.0022 lands on ~25% per notch — roughly a browser step.
    Trackpad pinch arrives as many small deltas and stays smooth at any speed. */
 const WHEEL_BASE = 0.0022;
-const DEFAULTS = { zoomSpeed: 1, textSize: 17, lineHeight: 1.68, invertZoom: false, openIn: 'tab' };
+const DEFAULTS = { zoomSpeed: 1, textSize: 17, lineHeight: 1.68, invertZoom: false, openIn: 'tab', closeScope: 'tab' };
 let cfg = Object.assign({}, DEFAULTS, store.get('cfg', {}) || {});
 
 /** % change a single mouse-wheel notch produces at the current speed. */
@@ -237,6 +237,7 @@ function applyCfg({ remeasure = true, save = true } = {}) {
   cfg.lineHeight = Math.min(2.1, Math.max(1.3, Number(cfg.lineHeight) || 1.68));
   cfg.invertZoom = !!cfg.invertZoom;
   cfg.openIn = cfg.openIn === 'window' ? 'window' : 'tab';
+  cfg.closeScope = cfg.closeScope === 'window' ? 'window' : 'tab';
 
   root.style.setProperty('--base-size', cfg.textSize + 'px');
   root.style.setProperty('--line-height', String(cfg.lineHeight));
@@ -249,6 +250,10 @@ function applyCfg({ remeasure = true, save = true } = {}) {
   $('#cfg-openin-hint').textContent = cfg.openIn === 'window'
     ? 'Each file you open gets its own window'
     : 'Files you open join this window as tabs';
+  $('#cfg-closescope').querySelectorAll('button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.val === cfg.closeScope)));
+  $('#cfg-closescope-hint').textContent = cfg.closeScope === 'window'
+    ? 'Ctrl+W closes the window and every tab in it'
+    : 'Ctrl+W closes one tab; Ctrl+Shift+W closes the window';
   $('#cfg-zoomspeed-val').textContent = cfg.zoomSpeed.toFixed(2).replace(/0$/, '') + '×';
   $('#cfg-zoomspeed-hint').textContent = 'about ' + notchPercent() + '% per wheel notch';
   $('#cfg-textsize-val').textContent = cfg.textSize + 'px';
@@ -1237,6 +1242,22 @@ function stepTab(dir) {
   activateTab(tabs[(i + dir + tabs.length) % tabs.length].id);
 }
 
+/* Ctrl+Shift+W, and Ctrl+W when the close scope is set to the whole window.
+   In a browser tab there is nothing to close, so drop every tab instead. */
+function closeWindow() {
+  if (IS_TAURI) {
+    getCurrentWindow().close().catch(() => {});
+    return;
+  }
+  while (tabs.length) closeTab(tabs[tabs.length - 1].id);
+}
+
+/** What Ctrl+W does, per the close-scope setting. */
+function closeRequested() {
+  if (cfg.closeScope === 'window') { closeWindow(); return; }
+  if (state.id) closeTab(state.id);
+}
+
 /** Only the original window owns the restore list; extra windows would fight. */
 let isMainWindow = true;
 
@@ -1360,8 +1381,17 @@ window.addEventListener('keydown', (e) => {
   if (mod && e.key === '9') { e.preventDefault(); zoomFitWidth(); return; }
   if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); openViaPicker(); return; }
   if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); openFind(); return; }
-  if (mod && e.key.toLowerCase() === 'w') { e.preventDefault(); if (state.id) closeTab(state.id); return; }
+  if (mod && e.key.toLowerCase() === 'w') {
+    e.preventDefault();
+    e.shiftKey ? closeWindow() : closeRequested();
+    return;
+  }
   if (mod && e.key === 'Tab') { e.preventDefault(); stepTab(e.shiftKey ? -1 : 1); return; }
+  if (mod && (e.key === 'PageDown' || e.key === 'PageUp')) {
+    e.preventDefault();
+    stepTab(e.key === 'PageDown' ? 1 : -1);
+    return;
+  }
   if (mod && /^[1-8]$/.test(e.key)) {
     e.preventDefault();
     const t = tabs[Number(e.key) - 1];
@@ -1460,6 +1490,12 @@ $('#cfg-openin').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-val]');
   if (!btn) return;
   cfg.openIn = btn.dataset.val;
+  applyCfg({ remeasure: false });
+});
+$('#cfg-closescope').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-val]');
+  if (!btn) return;
+  cfg.closeScope = btn.dataset.val;
   applyCfg({ remeasure: false });
 });
 $('#cfg-reset').addEventListener('click', () => {
