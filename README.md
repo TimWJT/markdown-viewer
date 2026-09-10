@@ -103,6 +103,23 @@ The gear button (or `,`) opens a small panel. Everything applies live and persis
 | **Invert zoom direction** | off | scroll down zooms in |
 | **Open files in** | New tab | new tab / new window |
 | **Ctrl+W closes** | This tab | this tab / all tabs |
+| **Updates** | — | Check for updates |
+
+## Updates
+
+The desktop app checks GitHub for a new release a few seconds after launch, at
+most once every six hours. If one exists, a bar appears at the bottom of the
+window offering to install it — nothing is downloaded until you click **Update**.
+**Later** dismisses that version until the next one ships. Settings has a
+**Check for updates** button for checking on demand, and shows the version you
+are running.
+
+Update packages are signed with a minisign key; the app refuses any manifest it
+cannot verify against the public key baked into `tauri.conf.json`. The private
+key lives in the `TAURI_SIGNING_PRIVATE_KEY` repository secret and is only used
+by the release workflow.
+
+The standalone HTML build has nothing to update, so the setting is hidden there.
 
 Zoom speed scales the exponent applied to wheel deltas, so it affects both the mouse wheel and trackpad pinch proportionally — pinch stays smooth at any setting because it arrives as many small deltas. The panel shows the resulting per-notch percentage as you drag the slider.
 

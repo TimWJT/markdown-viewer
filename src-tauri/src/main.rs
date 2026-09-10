@@ -120,7 +120,12 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|_app| {
+            // The frontend drives the check, so the plugin only needs to exist.
+            #[cfg(desktop)]
+            _app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+
             #[cfg(target_os = "windows")]
             if let Some(window) = _app.get_webview_window("main") {
                 disable_builtin_pinch_zoom(&window);

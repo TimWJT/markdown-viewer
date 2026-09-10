@@ -148,11 +148,22 @@
     <label class="check"><input type="checkbox" id="cfg-invert"> Scroll down zooms in</label>
   </div>
 
+  <div class="field" id="cfg-update">
+    <label>Updates <b id="cfg-version"></b></label>
+    <button class="btn" id="cfg-check" style="width:100%">Check for updates</button>
+    <small id="cfg-update-hint">Checked automatically when the app starts</small>
+  </div>
+
   <button class="btn primary" id="cfg-reset" style="width:100%">Reset to defaults</button>
 </div>
 
 <div id="drop"><div>Drop to open</div></div>
 <div id="toast"></div>
+<div id="update" role="status">
+  <span id="update-text"></span>
+  <button class="btn primary" id="update-go">Update</button>
+  <button class="btn" id="update-later">Later</button>
+</div>
 <input type="file" id="file-input" accept=".md,.markdown,.mdown,.mkd,.mdx,.txt,text/markdown,text/plain" hidden>
 
 <script>/*__JS__*/</script>

@@ -1,6 +1,6 @@
 [package]
 name = "markdown-viewer"
-version = "1.0.3"
+version = "1.1.0"
 description = "A markdown viewer that gets out of the way"
 authors = ["Tim"]
 edition = "2021"
@@ -11,10 +11,18 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
+# generate_context! embeds the plugins block from tauri.conf.json as JSON, so
+# serde_json has to be a direct dependency of this crate.
+serde_json = "1"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2"
+tauri-plugin-process = "2"
+
+# The updater only exists on desktop; mobile targets have no installer to swap.
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2"
 
 # Pinned to whatever Tauri already resolves, so we share its COM types.
 [target.'cfg(windows)'.dependencies]
