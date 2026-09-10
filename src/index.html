@@ -124,6 +124,15 @@
   </div>
 
   <div class="field">
+    <label>Ctrl+W closes</label>
+    <div class="seg" id="cfg-closescope" role="radiogroup" aria-label="Ctrl+W closes">
+      <button type="button" data-val="tab" role="radio" aria-checked="true">This tab</button>
+      <button type="button" data-val="window" role="radio" aria-checked="false">All tabs</button>
+    </div>
+    <small id="cfg-closescope-hint">Ctrl+W closes one tab; Ctrl+Shift+W closes the window</small>
+  </div>
+
+  <div class="field">
     <label for="cfg-textsize">Text size <b id="cfg-textsize-val">17px</b></label>
     <input type="range" id="cfg-textsize" min="13" max="26" step="1" value="17">
     <small>Base size before zoom is applied</small>
