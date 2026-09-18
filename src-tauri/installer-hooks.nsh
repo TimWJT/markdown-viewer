@@ -44,6 +44,17 @@
 
 !macro NSIS_HOOK_PREUNINSTALL
 
+  ; Clean uninstall by default. The confirm page's box is relabelled "Keep my
+  ; settings" (nsis/English.nsh), and Tauri deletes app data when the box state
+  ; is 1, so invert it here. Updates (/UPDATE) never delete app data.
+  ${If} $UpdateMode <> 1
+    ${If} $DeleteAppDataCheckboxState = 1
+      StrCpy $DeleteAppDataCheckboxState 0
+    ${Else}
+      StrCpy $DeleteAppDataCheckboxState 1
+    ${EndIf}
+  ${EndIf}
+
   Delete "$DESKTOP\${PRODUCTNAME}.lnk"
 
   DeleteRegKey SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe"

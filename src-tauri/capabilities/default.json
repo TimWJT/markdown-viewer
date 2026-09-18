@@ -17,6 +17,7 @@
     "window-state:default",
     "core:webview:allow-create-webview-window",
     "core:window:allow-close",
+    "core:window:allow-destroy",
     "updater:default",
     "process:allow-restart"
   ]

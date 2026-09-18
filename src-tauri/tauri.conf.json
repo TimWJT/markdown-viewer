@@ -78,6 +78,7 @@
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "./installer-hooks.nsh",
+        "customLanguageFiles": { "English": "./nsis/English.nsh" },
         "startMenuFolder": "Markdown Viewer"
       }
     },

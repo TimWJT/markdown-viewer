@@ -1,3 +1,4 @@
+import './startup.js';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
@@ -80,6 +81,7 @@ function loadMermaid() {
 let mermaidSeq = 0;
 
 async function renderMermaid() {
+  const current = captureRenderGuard();
   const blocks = [...els.doc.querySelectorAll('pre > code.language-mermaid')];
   if (!blocks.length) return;
 
@@ -90,6 +92,7 @@ async function renderMermaid() {
     return; /* leave the code blocks exactly as they are */
   }
 
+  if (!current()) return;
   const dark = matchMedia('(prefers-color-scheme: dark)').matches;
   const explicit = root.getAttribute('data-theme');
   mermaid.initialize({
@@ -102,16 +105,18 @@ async function renderMermaid() {
     const source = code.textContent;
     try {
       const { svg } = await mermaid.render('mmd-' + ++mermaidSeq, source);
+      if (!current()) return;
       const figure = document.createElement('div');
       figure.className = 'mermaid-figure';
       figure.dataset.source = source;
       figure.innerHTML = svg;
       code.parentElement.replaceWith(figure);
     } catch {
+      if (!current()) return;
       /* invalid diagram: keep the source visible rather than blanking it */
     }
   }
-  scheduleMeasure();
+  if (current()) scheduleMeasure();
 }
 
 /** Re-render diagrams after a theme change so they don't stay the old palette. */
@@ -180,6 +185,14 @@ function makeTab(init) {
 
 /* A placeholder until something is opened, so `state.x` is always safe. */
 let state = makeTab({});
+let renderRevision = 0;
+
+/* Deferred DOM work must still belong to this exact rendered document. */
+function captureRenderGuard() {
+  const tab = state;
+  const revision = renderRevision;
+  return () => state === tab && tabs.includes(tab) && revision === renderRevision;
+}
 
 /* True only inside the Tauri shell. In a plain browser every file path below
    falls back to the web APIs. */
@@ -226,7 +239,7 @@ async function idbGet(k) {
    is deltaY 100, so 0.0022 lands on ~25% per notch — roughly a browser step.
    Trackpad pinch arrives as many small deltas and stays smooth at any speed. */
 const WHEEL_BASE = 0.0022;
-const DEFAULTS = { zoomSpeed: 1, textSize: 17, lineHeight: 1.68, invertZoom: false, openIn: 'tab', closeScope: 'tab' };
+const DEFAULTS = { zoomSpeed: 1, textSize: 17, lineHeight: 1.68, invertZoom: false, openIn: 'tab', closeScope: 'tab', restoreTabs: false };
 let cfg = Object.assign({}, DEFAULTS, store.get('cfg', {}) || {});
 
 /** % change a single mouse-wheel notch produces at the current speed. */
@@ -241,6 +254,7 @@ function applyCfg({ remeasure = true, save = true } = {}) {
   cfg.invertZoom = !!cfg.invertZoom;
   cfg.openIn = cfg.openIn === 'window' ? 'window' : 'tab';
   cfg.closeScope = cfg.closeScope === 'window' ? 'window' : 'tab';
+  cfg.restoreTabs = !!cfg.restoreTabs;
 
   root.style.setProperty('--base-size', cfg.textSize + 'px');
   root.style.setProperty('--line-height', String(cfg.lineHeight));
@@ -249,6 +263,7 @@ function applyCfg({ remeasure = true, save = true } = {}) {
   $('#cfg-textsize').value = String(cfg.textSize);
   $('#cfg-lineheight').value = String(cfg.lineHeight);
   $('#cfg-invert').checked = cfg.invertZoom;
+  $('#cfg-restore').checked = cfg.restoreTabs;
   $('#cfg-openin').querySelectorAll('button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.val === cfg.openIn)));
   $('#cfg-openin-hint').textContent = cfg.openIn === 'window'
     ? 'Each file you open gets its own window'
@@ -339,6 +354,7 @@ async function checkForUpdate({ manual = false } = {}) {
       $('#cfg-update-hint').textContent = `Version ${found.version} is ready to install`;
     } else {
       pendingUpdate = null;
+      hideUpdateBar();
       $('#cfg-update-hint').textContent = 'You are on the latest version';
       if (manual) toast('You are on the latest version');
     }
@@ -695,6 +711,8 @@ function resolveImages() {
 }
 
 function render(text) {
+  renderRevision++;
+  const current = captureRenderGuard();
   const dirty = marked.parse(stripFrontMatter(text));
   els.doc.innerHTML = DOMPurify.sanitize(dirty, { ADD_ATTR: ['target', 'id'] });
 
@@ -727,7 +745,10 @@ function render(text) {
     pre.addEventListener('mouseenter', () => { btn.style.opacity = '1'; });
     pre.addEventListener('mouseleave', () => { btn.style.opacity = '0'; });
     btn.addEventListener('click', () => {
-      navigator.clipboard.writeText(c.textContent).then(() => toast('Copied'), () => toast('Copy failed'));
+      navigator.clipboard.writeText(c.textContent).then(
+        () => { if (current()) toast('Copied'); },
+        () => { if (current()) toast('Copy failed'); },
+      );
     });
     pre.appendChild(btn);
   });
@@ -739,7 +760,7 @@ function render(text) {
         /* The webview refuses target=_blank, so hand the URL to the OS. */
         a.addEventListener('click', (e) => {
           e.preventDefault();
-          openUrl(href).catch(() => toast('Could not open link'));
+          openUrl(href).catch(() => { if (current()) toast('Could not open link'); });
         });
       } else {
         a.target = '_blank';
@@ -760,8 +781,9 @@ function render(text) {
      would leave the measured zoom surface stale (short canvas, clipped scroll). */
   els.doc.querySelectorAll('img').forEach((img) => {
     if (img.complete) return;
-    img.addEventListener('load', scheduleMeasure, { once: true });
-    img.addEventListener('error', scheduleMeasure, { once: true });
+    const loaded = () => { if (current()) scheduleMeasure(); };
+    img.addEventListener('load', loaded, { once: true });
+    img.addEventListener('error', loaded, { once: true });
   });
 
   buildOutline();
@@ -825,7 +847,8 @@ function setDoc(text, resetScroll) {
   els.scroller.classList.add('instant');
   els.scroller.scrollTop = keep;
   els.scroller.scrollLeft = keepLeft;
-  requestAnimationFrame(() => els.scroller.classList.remove('instant'));
+  const current = captureRenderGuard();
+  requestAnimationFrame(() => { if (current()) els.scroller.classList.remove('instant'); });
   /* The native shell reopens by path, so caching the text there is dead weight
      — and this runs on every live-reload tick. */
   if (!(IS_TAURI && state.path) && text.length < 900000) {
@@ -942,6 +965,14 @@ async function openPath(path, { allowNewWindow = true } = {}) {
   let mtime = 0;
   try { mtime = await invoke('file_mtime', { path }); } catch {}
 
+  /* Another request may have opened this path while the read was pending. */
+  const committed = tabs.find((t) => t.path && t.path.toLowerCase() === path.toLowerCase());
+  if (committed) {
+    activateTab(committed.id);
+    try { await getCurrentWindow().setFocus(); } catch {}
+    return;
+  }
+
   const name = baseName(path);
   const tab = makeTab({ name, path, text, lastModified: mtime, docDir: dirOf(path, name) });
   tabs.push(tab);
@@ -1015,7 +1046,37 @@ const WATCH_MAX_FAILS = 20; // ~14s
 let watchTimer = null;
 let watchFails = 0;
 
+/* ---------- watch-session guards ----------
+   An asynchronous read belongs to the document and watch session that started
+   it. `watchEpoch` is bumped whenever the active document or its watch session
+   changes (tab switch, watch stop/restart, final close), so a read that
+   finishes late is discarded instead of writing into whatever tab is now
+   active — a tab-reference check alone is not enough, because switching
+   A → B → A lands back on the original object. `opSeq` orders overlapping
+   operations: only the newest one may commit, so an earlier slow read can
+   never roll back a newer result. Polls wait while a read is in flight;
+   explicit reloads supersede it. Stale IPC is ignored, not cancelled. */
+let watchEpoch = 0;
+let opSeq = 0;
+let watchInFlight = null;
+
+/** Snapshot taken before the first await of a reload/poll operation. */
+function beginWatchOp() {
+  const s = { tab: state, path: state.path, handle: state.handle, epoch: watchEpoch, op: ++opSeq };
+  watchInFlight = s;
+  return s;
+}
+
+/** True only while this exact operation is still the newest one for the
+ *  still-active document in a still-current watch session. */
+function watchOpCurrent(s) {
+  return s.op === opSeq && s.epoch === watchEpoch && state === s.tab &&
+    state.path === s.path && state.handle === s.handle && tabs.includes(s.tab);
+}
+
 function stopWatch() {
+  watchEpoch++;   // invalidates every in-flight read for the old session
+  watchInFlight = null;
   clearInterval(watchTimer);
   watchTimer = null;
   watchFails = 0;
@@ -1036,32 +1097,44 @@ function onWatchError() {
 }
 
 async function pollNative() {
+  if (!state.path || !tabs.includes(state) || watchInFlight) return;
+  const s = beginWatchOp();
   try {
-    const m = await invoke('file_mtime', { path: state.path });
-    if (m !== state.lastModified) {
-      const text = await invoke('read_text_file', { path: state.path });
-      state.lastModified = m;
+    const m = await invoke('file_mtime', { path: s.path });
+    if (!watchOpCurrent(s)) return;
+    if (m !== s.tab.lastModified) {
+      const text = await invoke('read_text_file', { path: s.path });
+      if (!watchOpCurrent(s)) return;
+      s.tab.lastModified = m;
       setDoc(text, false);
       toast('Reloaded');
     }
     watchFails = 0;
   } catch {
-    onWatchError();
+    if (watchOpCurrent(s)) onWatchError();
+  } finally {
+    if (watchInFlight === s) watchInFlight = null;
   }
 }
 
 async function pollHandle() {
+  if (!state.handle || !tabs.includes(state) || watchInFlight) return;
+  const s = beginWatchOp();
   try {
-    const f = await state.handle.getFile();
-    if (f.lastModified !== state.lastModified) {
+    const f = await s.handle.getFile();
+    if (!watchOpCurrent(s)) return;
+    if (f.lastModified !== s.tab.lastModified) {
       const text = await f.text();
-      state.lastModified = f.lastModified;
+      if (!watchOpCurrent(s)) return;
+      s.tab.lastModified = f.lastModified;
       setDoc(text, false);
       toast('Reloaded');
     }
     watchFails = 0;
   } catch {
-    onWatchError();
+    if (watchOpCurrent(s)) onWatchError();
+  } finally {
+    if (watchInFlight === s) watchInFlight = null;
   }
 }
 
@@ -1070,32 +1143,47 @@ function startWatch() {
   if (IS_TAURI && state.path) {
     els.live.classList.add('on');
     markActiveTabWatching(true);
-    watchTimer = setInterval(pollNative, WATCH_INTERVAL);
+    const epoch = watchEpoch;
+    watchTimer = setInterval(() => { if (epoch === watchEpoch) pollNative(); }, WATCH_INTERVAL);
   } else if (state.handle) {
     els.live.classList.add('on');
     markActiveTabWatching(true);
-    watchTimer = setInterval(pollHandle, WATCH_INTERVAL);
+    const epoch = watchEpoch;
+    watchTimer = setInterval(() => { if (epoch === watchEpoch) pollHandle(); }, WATCH_INTERVAL);
   }
 }
 
 /** Force a re-read, ignoring mtime. Bound to F5. */
 async function reloadNow() {
+  if (!tabs.includes(state) || (!(IS_TAURI && state.path) && !state.handle)) return;
+  /* Explicit reload supersedes pending work; timer ticks wait for it. */
+  const s = beginWatchOp();
   try {
-    if (IS_TAURI && state.path) {
-      const text = await invoke('read_text_file', { path: state.path });
-      state.lastModified = await invoke('file_mtime', { path: state.path }).catch(() => 0);
+    if (IS_TAURI && s.path) {
+      /* Sample metadata before reading: sampling afterwards could label old
+         text with a newer save's mtime and make the next poll miss that save. */
+      const mtime = await invoke('file_mtime', { path: s.path }).catch(() => 0);
+      if (!watchOpCurrent(s)) return;
+      const text = await invoke('read_text_file', { path: s.path });
+      if (!watchOpCurrent(s)) return;
+      s.tab.lastModified = mtime;
       setDoc(text, false);
       startWatch();
       toast('Reloaded');
-    } else if (state.handle) {
-      const f = await state.handle.getFile();
-      state.lastModified = f.lastModified;
-      setDoc(await f.text(), false);
+    } else if (s.handle) {
+      const f = await s.handle.getFile();
+      if (!watchOpCurrent(s)) return;
+      const text = await f.text();
+      if (!watchOpCurrent(s)) return;
+      s.tab.lastModified = f.lastModified;
+      setDoc(text, false);
       startWatch();
       toast('Reloaded');
     }
   } catch {
-    toast('Could not reload');
+    if (watchOpCurrent(s)) toast('Could not reload');
+  } finally {
+    if (watchInFlight === s) watchInFlight = null;
   }
 }
 
@@ -1293,14 +1381,15 @@ function activateTab(id) {
 }
 
 function showActiveTab() {
+  startWatch(); // invalidate the previous active session before rendering
   render(state.text);
   els.empty.classList.add('gone');
   els.scroller.classList.add('instant');
   els.scroller.scrollTop = state.scrollTop;
   els.scroller.scrollLeft = state.scrollLeft;
-  requestAnimationFrame(() => els.scroller.classList.remove('instant'));
+  const current = captureRenderGuard();
+  requestAnimationFrame(() => { if (current()) els.scroller.classList.remove('instant'); });
   updateTitle();
-  startWatch();
   renderTabs();
   syncOutlineActive();
   persistTabs();
@@ -1311,10 +1400,14 @@ function closeTab(id) {
   const i = tabs.findIndex((t) => t.id === id);
   if (i === -1) return;
   const wasActive = tabs[i].id === state.id;
-  tabs.splice(i, 1);
+  const [closed] = tabs.splice(i, 1);
+  if (closed.path) rememberClosed([closed.path]);
 
   if (!tabs.length) {
     stopWatch();
+    renderRevision++;
+    clearFind();
+    updateFindCount();
     state = makeTab({});
     els.doc.innerHTML = '';
     els.empty.classList.remove('gone');
@@ -1323,6 +1416,12 @@ function closeTab(id) {
     updateTitle();
     renderTabs();
     persistTabs();
+    measure();
+    els.scroller.scrollTop = 0;
+    els.scroller.scrollLeft = 0;
+    els.scroller.classList.remove('instant');
+    /* Like a browser: the last tab takes its window with it. */
+    if (IS_TAURI) destroyWindow();
     return;
   }
   if (wasActive) {
@@ -1344,7 +1443,9 @@ function stepTab(dir) {
    In a browser tab there is nothing to close, so drop every tab instead. */
 function closeWindow() {
   if (IS_TAURI) {
-    getCurrentWindow().close().catch(() => {});
+    const paths = tabs.map((t) => t.path).filter(Boolean);
+    if (paths.length) rememberClosed(paths);
+    destroyWindow();
     return;
   }
   while (tabs.length) closeTab(tabs[tabs.length - 1].id);
@@ -1356,12 +1457,63 @@ function closeRequested() {
   if (state.id) closeTab(state.id);
 }
 
-/** Only the original window owns the restore list; extra windows would fight. */
 let isMainWindow = true;
+let windowLabel = 'main';
+
+/* ---------- session and recently closed ----------
+   `session` maps each live window's label to its open paths. Quitting (title-bar
+   close / Alt+F4) exits without running any page code, so it must always be
+   current. The next launch either restores it (setting) or turns it into one
+   Ctrl+Shift+T entry, the way a browser does. */
+const CLOSED_MAX = 25;
+
+function readSession() {
+  const s = store.get('session', {});
+  return s && typeof s === 'object' && !Array.isArray(s) ? s : {};
+}
 
 function persistTabs() {
-  if (!IS_TAURI || !isMainWindow) return;
-  store.set('openTabs', tabs.map((t) => t.path).filter(Boolean));
+  if (!IS_TAURI) return;
+  const session = readSession();
+  const paths = tabs.map((t) => t.path).filter(Boolean);
+  if (paths.length) session[windowLabel] = paths;
+  else delete session[windowLabel];
+  store.set('session', session);
+}
+
+function cleanPaths(list) {
+  return Array.isArray(list)
+    ? list.filter((p) => typeof p === 'string' && p.trim().length > 0)
+    : [];
+}
+
+function rememberClosed(paths) {
+  if (!IS_TAURI) return;
+  const stack = store.get('closed', []);
+  const next = (Array.isArray(stack) ? stack : []).concat([paths]).slice(-CLOSED_MAX);
+  store.set('closed', next);
+}
+
+/** Ctrl+Shift+T: reopen the most recently closed tab, window or session. */
+async function reopenClosed() {
+  if (!IS_TAURI) return;
+  const stack = store.get('closed', []);
+  if (!Array.isArray(stack) || !stack.length) { toast('Nothing to reopen'); return; }
+  const paths = cleanPaths(stack.pop());
+  store.set('closed', stack);
+  let opened = 0;
+  for (const p of paths) {
+    try { await openPath(p, { allowNewWindow: false }); opened++; } catch { /* moved or deleted */ }
+  }
+  if (!opened) toast('Could not reopen that file');
+}
+
+/** Close this window without the native close request, which quits the app. */
+function destroyWindow() {
+  const session = readSession();
+  delete session[windowLabel];
+  store.set('session', session);
+  getCurrentWindow().destroy().catch(() => {});
 }
 
 /** Step to the next/previous markdown file sitting in the same folder. */
@@ -1388,11 +1540,9 @@ async function stepFile(dir) {
 
 /* ---------- appearance ---------- */
 const THEMES = ['auto', 'light', 'dark'];
-let theme = store.get('theme', 'auto');
+let theme = window.__mdvTheme.read();
 function applyTheme(t, announce) {
-  theme = THEMES.includes(t) ? t : 'auto';
-  if (theme === 'auto') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', theme);
+  theme = window.__mdvTheme.apply(t);
   store.set('theme', theme);
   $('#btn-theme').setAttribute('aria-pressed', String(theme !== 'auto'));
   $('#btn-theme').title = 'Theme: ' + theme + ' (t)';
@@ -1469,9 +1619,20 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === 'w') {
+    e.preventDefault();
+    e.shiftKey ? closeWindow() : closeRequested();
+    return;
+  }
+  if (mod && e.shiftKey && e.key.toLowerCase() === 't') {
+    e.preventDefault();
+    reopenClosed();
+    return;
+  }
+
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
-  const mod = e.ctrlKey || e.metaKey;
 
   if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomStep(1); return; }
   if (mod && (e.key === '-' || e.key === '_')) { e.preventDefault(); zoomStep(-1); return; }
@@ -1479,11 +1640,6 @@ window.addEventListener('keydown', (e) => {
   if (mod && e.key === '9') { e.preventDefault(); zoomFitWidth(); return; }
   if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); openViaPicker(); return; }
   if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); openFind(); return; }
-  if (mod && e.key.toLowerCase() === 'w') {
-    e.preventDefault();
-    e.shiftKey ? closeWindow() : closeRequested();
-    return;
-  }
   if (mod && e.key === 'Tab') { e.preventDefault(); stepTab(e.shiftKey ? -1 : 1); return; }
   if (mod && (e.key === 'PageDown' || e.key === 'PageUp')) {
     e.preventDefault();
@@ -1533,6 +1689,9 @@ window.addEventListener('drop', async (e) => {
   if (f) { stopWatch(); await loadFile(f, null); }
 });
 
+/* Readiness must wait for registration as well as boot, including URL opens. */
+let externalOpenListener = Promise.resolve();
+
 /* The native shell swallows HTML drop events, so wire Tauri's own instead. */
 if (IS_TAURI) {
   listen('tauri://drag-enter', () => els.drop.classList.add('on'));
@@ -1543,9 +1702,14 @@ if (IS_TAURI) {
     if (p) openPath(p).catch(() => toast('Could not open that file'));
   });
   /* second launch (double-clicking another .md) routes through single-instance */
-  listen('open-file', (e) => {
-    if (e.payload) openPath(e.payload).catch(() => toast('Could not open that file'));
-  });
+  externalOpenListener = listen('open-file', async (e) => {
+    if (!e.payload) return;
+    try {
+      if (await invoke('claim_external_open', { path: e.payload })) await openPath(e.payload);
+    } catch { toast('Could not open that file'); }
+  }, { target: { kind: 'WebviewWindow', label: getCurrentWindow().label } });
+  /* Handle early registration failure immediately; readiness still observes it. */
+  externalOpenListener.catch(() => {});
 }
 
 window.addEventListener('paste', (e) => {
@@ -1582,6 +1746,10 @@ bindRange('#cfg-textsize', 'textSize');
 bindRange('#cfg-lineheight', 'lineHeight');
 $('#cfg-invert').addEventListener('change', (e) => {
   cfg.invertZoom = e.target.checked;
+  applyCfg({ remeasure: false });
+});
+$('#cfg-restore').addEventListener('change', (e) => {
+  cfg.restoreTabs = e.target.checked;
   applyCfg({ remeasure: false });
 });
 $('#cfg-openin').addEventListener('click', (e) => {
@@ -1627,20 +1795,23 @@ applyFont(font, false);
 applyOutline(outlineOn, false);
 paint();
 
-(async function boot() {
+const boot = (async function boot() {
   renderTabs();
 
   if (IS_TAURI) {
     /* A window spawned by "open in new window" is told which file to show and
        must not touch the saved tab set — that belongs to the original window. */
-    let label = 'main';
-    try { label = getCurrentWindow().label; } catch {}
-    isMainWindow = label === 'main';
+    try { windowLabel = getCurrentWindow().label; } catch {}
+    isMainWindow = windowLabel === 'main';
 
-    const requested = new URLSearchParams(location.search).get('file');
+    const params = new URLSearchParams(location.search);
+    const requested = params.get('file');
     if (requested) {
-      try { await openPath(requested, { allowNewWindow: false }); }
-      catch { toast('Could not open that file'); }
+      try {
+        const owned = params.get('externalOpen') !== '1' ||
+          await invoke('claim_external_open', { path: requested });
+        if (owned) await openPath(requested, { allowNewWindow: false });
+      } catch { toast('Could not open that file'); }
       els.scroller.focus({ preventScroll: true });
       return;
     }
@@ -1649,7 +1820,21 @@ paint();
     let initial = null;
     try { initial = await invoke('initial_file'); } catch {}
 
-    const saved = isMainWindow ? (store.get('openTabs', []) || []) : [];
+    /* Only the first window of a launch picks up what the last run left open,
+       every window's tabs included. */
+    let saved = [];
+    if (isMainWindow) {
+      const last = readSession();
+      const legacy = store.get('openTabs', null);
+      if (legacy !== null) last.legacy = legacy;
+      try { localStorage.removeItem('mdv.openTabs'); } catch {}
+      store.set('session', {});
+      const seen = new Set();
+      for (const p of Object.values(last).flatMap(cleanPaths)) {
+        if (!seen.has(p.toLowerCase())) { seen.add(p.toLowerCase()); saved.push(p); }
+      }
+      if (!cfg.restoreTabs && saved.length) { rememberClosed(saved); saved = []; }
+    }
     for (const p of saved) {
       if (initial && p.toLowerCase() === initial.toLowerCase()) continue;
       try { await openPath(p, { allowNewWindow: false }); } catch { /* moved or deleted */ }
@@ -1687,6 +1872,12 @@ paint();
   els.scroller.focus({ preventScroll: true });
 })();
 
+boot.finally(async () => {
+  if (!IS_TAURI) return;
+  await externalOpenListener;
+  await invoke('external_open_ready');
+}).catch(() => toast('Could not finish startup'));
+
 /* Version label and the launch update check live outside boot() so its early
    returns cannot skip them, and run late so they never compete with first
    paint. Only the main window prompts; document windows share the install. */
@@ -1697,4 +1888,5 @@ if (IS_TAURI) {
   if (bootLabel === 'main') setTimeout(() => { checkForUpdate(); }, 3000);
 } else {
   $('#cfg-update').style.display = 'none';
+  $('#cfg-restore-field').style.display = 'none';
 }

@@ -80,6 +80,7 @@ Opens files by drag-and-drop, the Open button, or pasting markdown straight from
 | `Ctrl` `1`–`8` | Jump to tab |
 | `Ctrl` `W` | Close tab, or the whole window — see settings |
 | `Ctrl` `Shift` `W` | Close the window and all its tabs |
+| `Ctrl` `Shift` `T` | Reopen the last closed tab, window, or previous session |
 | `o` | Toggle outline |
 | `t` | Cycle theme |
 | `w` | Cycle reading width |
@@ -103,6 +104,7 @@ The gear button (or `,`) opens a small panel. Everything applies live and persis
 | **Invert zoom direction** | off | scroll down zooms in |
 | **Open files in** | New tab | new tab / new window |
 | **Ctrl+W closes** | This tab | this tab / all tabs |
+| **Reopen tabs from last time** | off | on: restore every window's tabs at startup |
 | **Updates** | — | Check for updates |
 
 ## Updates
