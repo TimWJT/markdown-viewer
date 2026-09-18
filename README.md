@@ -212,3 +212,7 @@ Math and footnotes are inlined in both, costing about 210 KB together.
 ## Deliberately not included
 
 Editing, file trees, tabs, search across files, sync, plugins, wiki-links, graph view. Those are what make the other tools heavy. If you need them, use Obsidian.
+
+## License
+
+Free for personal and other noncommercial use under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may modify it and share your changes, but you may not use it to make money. For commercial use, contact [@TimWJT](https://github.com/TimWJT) for a commercial license.
