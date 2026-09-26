@@ -135,6 +135,10 @@ export class DomNode {
     this._parent = null;
     this._attributes = new Map();
     this.listeners = new Map();
+    /* Registration options, kept beside the callbacks. Dispatch ignores them,
+     * but a test may need to assert a listener was registered passive: false,
+     * since preventDefault() is a no-op on a passive one. */
+    this.listenerOptions = new Map();
   }
   get nodeType() { return this._nodeType; }
   get nodeName() { return this._nodeName; }
@@ -328,9 +332,10 @@ export class DomNode {
     return out;
   }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
-  addEventListener(type, fn) {
+  addEventListener(type, fn, options) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(fn);
+    this.listenerOptions.set(fn, options ?? null);
   }
   dispatchEvent(event) {
     for (const fn of this.listeners.get(event.type) || []) fn(event);

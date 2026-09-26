@@ -174,6 +174,10 @@ export function createHarness({ native = true, saved = {}, rawSaved = {}, label 
       return run('(() => { const tab = makeTab(__tabInit); tabs.push(tab); return tab; })()');
     },
     activate(tab) { run('activateTab')(tab.id); },
+    /** Options a listener was registered with, or null if it passed none. */
+    listenerOptions(type) {
+      return (window.listeners.get(type) || []).map(fn => window.listenerOptions.get(fn) ?? null);
+    },
     flushFrames() {
       const pending = [...frames.values()]; frames.clear();
       pending.forEach(fn => fn(0));

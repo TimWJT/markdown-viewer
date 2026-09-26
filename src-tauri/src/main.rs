@@ -469,30 +469,24 @@ async fn sibling_files(path: String) -> Result<Vec<String>, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// WebView2 implements its own pinch-to-zoom at the browser level, which scales
-/// the entire UI — toolbar included — and swallows the gesture before the page
-/// can act on it. The app does its own zoom on the document only, so turn the
-/// built-in one off and let the frontend handle pinch.
-#[cfg(target_os = "windows")]
-fn disable_builtin_pinch_zoom(window: &tauri::WebviewWindow) {
-    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings5;
-    use windows::core::Interface;
-
-    let result = window.with_webview(|webview| unsafe {
-        let controller = webview.controller();
-        if let Ok(core) = controller.CoreWebView2() {
-            if let Ok(settings) = core.Settings() {
-                if let Ok(settings5) = settings.cast::<ICoreWebView2Settings5>() {
-                    let _ = settings5.SetIsPinchZoomEnabled(false);
-                }
-            }
-        }
-    });
-
-    if let Err(e) = result {
-        eprintln!("could not reach the webview to disable pinch zoom: {e}");
-    }
-}
+// Do NOT call ICoreWebView2Settings5::SetIsPinchZoomEnabled(false) here.
+//
+// It is tempting: it stops WebView2 scaling the whole UI, toolbar included, on
+// a pinch. But that setting governs more than WebView2's own zoom — with pinch
+// disabled it also stops WebView2 translating the gesture into the ctrl+wheel
+// WheelEvent that is the *only* way the page ever learns about a pinch. The
+// frontend handles ctrl+wheel (src/main.js, capture phase, passive: false), so
+// disabling this setting does not hand the gesture to the frontend, it drops it
+// on the floor: pinch did nothing at all on Windows.
+//
+// Leaving the default (enabled) is what makes pinch arrive. The frontend stops
+// WebView2 from also zooming the page by calling preventDefault() on that same
+// event, which works because the listener is registered passive: false. So the
+// document zooms on its own transform and the toolbar stays put.
+//
+// macOS and Linux need none of this: WebKit and GTK deliver pinch as real
+// gesture* events and two-pointer touch input respectively, which the frontend
+// handles directly.
 
 // Windows print. wry's `print()` only evaluates `window.print()` in the page,
 // which WebView2 does not implement, so printing is a silent no-op here. This
@@ -596,10 +590,9 @@ fn main() {
             _app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
-            #[cfg(target_os = "windows")]
-            if let Some(window) = _app.get_webview_window("main") {
-                disable_builtin_pinch_zoom(&window);
-            }
+            // Nothing to do for pinch here: WebView2's pinch zoom stays enabled
+            // on purpose so the gesture reaches the page as ctrl+wheel. See the
+            // note above disable_builtin_pinch_zoom's old body.
             Ok(())
         })
         .manage(InitialFile(Mutex::new(initial)))
