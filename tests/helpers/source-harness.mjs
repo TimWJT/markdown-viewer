@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { DomElement, DomNode, NODE_TYPE } from './mini-dom.mjs';
 
 /* Execute the complete frontend, minus its package imports and automatic boot.
  * No lifecycle function is copied or replaced. New helpers in main.js therefore
@@ -19,125 +20,44 @@ export async function settle() {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
-class FakeNode {
+/* The fake DOM itself lives in ./mini-dom.mjs: a node tree, a selector engine
+ * and an HTML parser, shared with the sanitiser tests. FakeNode only adds what
+ * these fixtures need on top of it. */
+class FakeNode extends DomElement {
   constructor(tagName = '', text = '') {
-    this.tagName = tagName.toUpperCase();
-    this.nodeType = tagName === '#text' ? 3 : tagName === '#fragment' ? 11 : 1;
-    this.nodeValue = this.nodeType === 3 ? text : null;
-    this.children = [];
-    this.parentNode = null;
-    this.attributes = new Map();
-    this.dataset = {};
-    this.style = { setProperty(key, value) { this[key] = value; } };
-    this.listeners = new Map();
-    this.value = '';
-    this.scrollTop = this.scrollLeft = 0;
-    this.clientWidth = this.offsetWidth = 800;
-    this.clientHeight = this.offsetHeight = 600;
-    this.offsetTop = 0;
-    this.isContentEditable = false;
-    const classes = new Set();
-    this.classList = {
-      add: (...names) => names.forEach(n => classes.add(n)),
-      remove: (...names) => names.forEach(n => classes.delete(n)),
-      contains: name => classes.has(name),
-      toggle(name, force = !classes.has(name)) {
-        force ? classes.add(name) : classes.delete(name);
-        return force;
-      },
-    };
-    Object.defineProperty(this, 'className', {
-      get: () => [...classes].join(' '),
-      set: value => { classes.clear(); String(value).split(/\s+/).filter(Boolean).forEach(n => classes.add(n)); },
-    });
-  }
-  get parentElement() { return this.parentNode; }
-  get textContent() { return this.nodeType === 3 ? this.nodeValue : this.children.map(n => n.textContent).join(''); }
-  set textContent(value) {
-    if (this.nodeType === 3) { this.nodeValue = String(value); return; }
-    this.replaceChildren();
-    if (value !== '') this.appendChild(new FakeNode('#text', String(value)));
-  }
-  get innerHTML() { return this.textContent; }
-  set innerHTML(value) { this.textContent = value; }
-  appendChild(node) {
-    if (node.nodeType === 11) {
-      for (const child of [...node.children]) this.appendChild(child);
-      node.children = [];
-    } else {
-      node.parentNode = this;
-      this.children.push(node);
-    }
-    return node;
-  }
-  append(...nodes) { nodes.forEach(n => this.appendChild(n)); }
-  replaceChildren(...nodes) {
-    this.children.forEach(n => { n.parentNode = null; });
-    this.children = [];
-    this.append(...nodes);
-  }
-  replaceChild(next, old) {
-    const index = this.children.indexOf(old);
-    if (index < 0) throw new Error('DOM fixture: replaceChild target missing');
-    const nodes = next.nodeType === 11 ? [...next.children] : [next];
-    old.parentNode = null;
-    nodes.forEach(n => { n.parentNode = this; });
-    this.children.splice(index, 1, ...nodes);
-  }
-  normalize() {}
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
-  getAttribute(name) { return this.attributes.get(name) ?? null; }
-  removeAttribute(name) { this.attributes.delete(name); }
-  addEventListener(name, fn) {
-    if (!this.listeners.has(name)) this.listeners.set(name, []);
-    this.listeners.get(name).push(fn);
+    if (tagName === '#text') return new DomTextNode(null, text);
+    if (tagName === '#fragment') return new DomNode(null, NODE_TYPE.fragment, '#document-fragment');
+    super(null, tagName, text);
   }
   dispatch(name, event) { for (const fn of this.listeners.get(name) || []) fn(event); }
-  matches(selector) {
-    if (selector === '.tab[aria-selected="true"]') return this.classList.contains('tab') && this.getAttribute('aria-selected') === 'true';
-    if (selector.startsWith('.')) return this.classList.contains(selector.slice(1));
-    return this.tagName.toLowerCase() === selector;
-  }
-  closest(selector) {
-    for (let node = this; node; node = node.parentNode) {
-      if (selector.split(',').some(s => node.matches(s.trim()))) return node;
-    }
-    return null;
-  }
-  querySelectorAll(selector) {
-    const out = [];
-    const walk = node => {
-      for (const child of node.children) {
-        if (selector.split(',').some(s => child.matches(s.trim()))) out.push(child);
-        walk(child);
-      }
-    };
-    walk(this);
-    return out;
-  }
-  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
-  focus() { this.focused = true; }
-  select() {}
-  scrollIntoView() {}
-  scrollTo({ top = 0, left = 0 }) { this.scrollTop = top; this.scrollLeft = left; }
-  getBoundingClientRect() { return { top: 0, left: 0, width: this.clientWidth, height: this.clientHeight }; }
 }
 
-export function createHarness({ native = true, saved = {}, rawSaved = {}, label = 'main', search = '', invoke, checkUpdate, listen, allowNewWindows = false } = {}) {
+class DomTextNode extends DomNode {
+  constructor(ownerDocument, text) {
+    super(ownerDocument, NODE_TYPE.text, '#text');
+    this.nodeValue = text;
+  }
+}
+
+export function createHarness({ native = true, saved = {}, rawSaved = {}, label = 'main', search = '', invoke, checkUpdate, listen, allowNewWindows = false, marked, dompurify, footnote = null } = {}) {
   const nodes = new Map();
+  const document = new FakeNode('document');
   const element = selector => {
     if (selector === '#tabbar .tab[aria-selected="true"]') return element('#tabbar').querySelector('.tab[aria-selected="true"]');
-    if (!nodes.has(selector)) nodes.set(selector, new FakeNode(selector.includes('input') ? 'input' : 'div'));
+    if (!nodes.has(selector)) {
+      const node = new FakeNode(selector.includes('input') ? 'input' : 'div');
+      node.ownerDocument = document;
+      nodes.set(selector, node);
+    }
     return nodes.get(selector);
   };
-  const document = new FakeNode('document');
   document.documentElement = new FakeNode('html');
   document.head = new FakeNode('head');
   document.body = new FakeNode('body');
   document.querySelector = element;
   document.querySelectorAll = selector => [element(selector)];
-  document.createElement = tag => new FakeNode(tag);
-  document.createTextNode = text => new FakeNode('#text', text);
+  document.createElement = tag => { const node = new FakeNode(tag); node.ownerDocument = document; return node; };
+  document.createTextNode = text => { const node = new FakeNode('#text', text); node.ownerDocument = document; return node; };
   document.createDocumentFragment = () => new FakeNode('#fragment');
   document.createTreeWalker = (root, _kind, filter) => {
     const accepted = [];
@@ -192,8 +112,10 @@ export function createHarness({ native = true, saved = {}, rawSaved = {}, label 
     cancelAnimationFrame: id => frames.delete(id),
     // Parser doubles deliberately treat fixture text as plain text. Actual
     // render(), Find matching, tab rendering and lifecycle code still execute.
-    marked: { setOptions() {}, use() {}, parse: text => text },
-    markedFootnote: () => ({}), DOMPurify: { sanitize: html => html },
+    // Tests that care about what render() builds pass the real marked and the
+    // real DOMPurify, or a stand-in, through the options above.
+    marked: marked || { setOptions() {}, use() {}, parse: text => text },
+    markedFootnote: footnote || (() => ({})), DOMPurify: dompurify || { sanitize: html => html },
     hljs: { highlightElement() {} }, temml: { renderToString: () => { throw new Error('No math fixtures'); } },
     invoke: async (command, args) => {
       calls.push({ command, ...args });

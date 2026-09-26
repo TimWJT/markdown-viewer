@@ -2,3 +2,8 @@ node_modules/
 src-tauri/target/
 src-tauri/gen/schemas/
 dist/
+# Single-file standalone download, built by build.mjs. Not shipped in the app.
+/dist-standalone/
+# Known stray artefact: a 0-byte file named "B" left in the repo root by an audit
+# subagent's shell redirect. Kept on disk, not tracked. Safe to delete by hand.
+/B

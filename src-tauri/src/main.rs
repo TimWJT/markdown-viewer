@@ -395,22 +395,33 @@ fn first_file_arg<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
         .find(|a| !a.starts_with('-') && !a.is_empty())
 }
 
+// A sync command runs inline on the WebView2 UI thread, so every one of these
+// filesystem commands is async and hands the blocking std::fs work to
+// `spawn_blocking` — the same shape `claim_external_open` uses above.
 #[tauri::command]
-fn read_text_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))
+async fn read_text_file(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Milliseconds since the epoch, so the frontend can compare it the same way it
 /// compares `File.lastModified` in the browser build.
 #[tauri::command]
-fn file_mtime(path: String) -> Result<u64, String> {
-    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-    let modified = meta.modified().map_err(|e| e.to_string())?;
-    let ms = modified
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_millis();
-    Ok(ms as u64)
+async fn file_mtime(path: String) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        let modified = meta.modified().map_err(|e| e.to_string())?;
+        let ms = modified
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_millis();
+        Ok(ms as u64)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -421,33 +432,41 @@ fn initial_file(state: State<'_, InitialFile>) -> Option<String> {
 /// Markdown files sitting next to `path`, sorted, so the frontend can offer
 /// next/previous navigation through a docs folder.
 #[tauri::command]
-fn sibling_files(path: String) -> Result<Vec<String>, String> {
-    const EXTS: [&str; 6] = ["md", "markdown", "mdown", "mkd", "mdx", "txt"];
+async fn sibling_files(path: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        const EXTS: [&str; 6] = ["md", "markdown", "mdown", "mkd", "mdx", "txt"];
 
-    let file = std::path::Path::new(&path);
-    let dir = file
-        .parent()
-        .ok_or_else(|| "no parent directory".to_string())?;
+        let file = std::path::Path::new(&path);
+        let dir = file
+            .parent()
+            .ok_or_else(|| "no parent directory".to_string())?;
 
-    let mut out: Vec<String> = std::fs::read_dir(dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            if !entry.file_type().ok()?.is_file() {
-                return None;
-            }
-            let p = entry.path();
-            let ext = p.extension()?.to_str()?.to_ascii_lowercase();
-            if !EXTS.contains(&ext.as_str()) {
-                return None;
-            }
-            Some(p.to_string_lossy().into_owned())
-        })
-        .collect();
+        let mut out: Vec<String> = std::fs::read_dir(dir)
+            .map_err(|e| e.to_string())?
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let p = entry.path();
+                // `metadata()` follows symlinks, so a linked .md is offered in
+                // next/previous navigation too. Directories stay excluded, which
+                // is also what stops a symlink loop being walked; an unreadable
+                // or broken link is skipped the same way.
+                if !p.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                    return None;
+                }
+                let ext = p.extension()?.to_str()?.to_ascii_lowercase();
+                if !EXTS.contains(&ext.as_str()) {
+                    return None;
+                }
+                Some(p.to_string_lossy().into_owned())
+            })
+            .collect();
 
-    // Case-insensitive so the order matches what a file manager shows.
-    out.sort_by_key(|s| s.to_lowercase());
-    Ok(out)
+        // Case-insensitive so the order matches what a file manager shows.
+        out.sort_by_key(|s| s.to_lowercase());
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// WebView2 implements its own pinch-to-zoom at the browser level, which scales
@@ -473,6 +492,52 @@ fn disable_builtin_pinch_zoom(window: &tauri::WebviewWindow) {
     if let Err(e) = result {
         eprintln!("could not reach the webview to disable pinch zoom: {e}");
     }
+}
+
+// Windows print. wry's `print()` only evaluates `window.print()` in the page,
+// which WebView2 does not implement, so printing is a silent no-op here. This
+// calls the native WebView2 print dialog instead; macOS and Linux keep wry's
+// real native print path and never reach it.
+#[cfg(target_os = "windows")]
+fn show_print_ui(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_16, COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER,
+    };
+    use windows::core::Interface;
+
+    // The blocking worker waits for the result; with_webview dispatches the
+    // COM calls to the UI thread. Never wait from a synchronous IPC command or
+    // window-event callback. Report native errors to the frontend as well as
+    // dispatch errors, without unwrapping or timeout-based aborts.
+    let (sender, receiver) = mpsc::channel();
+    window
+        .with_webview(move |webview| {
+            let result = (|| unsafe {
+                let core = webview.controller().CoreWebView2()?;
+                let core16 = core.cast::<ICoreWebView2_16>()?;
+                core16.ShowPrintUI(COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER)
+            })();
+            let _ = sender.send(result.map_err(|e| e.to_string()));
+        })
+        .map_err(|e| e.to_string())?;
+
+    receiver.recv().map_err(|e| e.to_string())?
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_print_ui(_window: &tauri::WebviewWindow) -> Result<(), String> {
+    Err("this platform prints through the webview's own print path".to_string())
+}
+
+/// Windows-only: opens the native WebView2 print dialog. The frontend should
+/// call Tauri's `getCurrentWebviewWindow().print()` everywhere instead — that
+/// is the real native path on macOS and Linux, and this command is what makes
+/// it do something on Windows.
+#[tauri::command]
+async fn print_windows(window: tauri::WebviewWindow) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || show_print_ui(&window))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 fn main() {
@@ -544,7 +609,8 @@ fn main() {
             initial_file,
             sibling_files,
             external_open_ready,
-            claim_external_open
+            claim_external_open,
+            print_windows
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Markdown Viewer");

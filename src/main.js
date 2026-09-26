@@ -8,7 +8,7 @@ import hljs from 'highlight.js/lib/common';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { WebviewWindow, getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { check as checkUpdate } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
@@ -61,21 +61,65 @@ function renderMath() {
 
 /* ---------- mermaid ----------
    Loaded from a sibling file only when a document actually contains a diagram.
-   Absent in the standalone single-file build, where the fetch simply fails and
-   the diagram stays a syntax-highlighted code block. */
+   The single-file build inlines everything and ships no sibling, so there the
+   load fails, the diagram stays a syntax-highlighted code block, and the block
+   says so — otherwise "not supported here" is indistinguishable from broken. */
 let mermaidPromise = null;
 
 function loadMermaid() {
   if (mermaidPromise) return mermaidPromise;
-  mermaidPromise = new Promise((resolve, reject) => {
+  let script = null;
+  const attempt = new Promise((resolve, reject) => {
     if (window.__mermaid) { resolve(window.__mermaid); return; }
-    const s = document.createElement('script');
-    s.src = 'mermaid.js';
-    s.onload = () => (window.__mermaid ? resolve(window.__mermaid) : reject(new Error('no mermaid')));
-    s.onerror = () => reject(new Error('mermaid unavailable'));
-    document.head.appendChild(s);
+    script = document.createElement('script');
+    script.src = 'mermaid.js';
+    script.onload = () => (window.__mermaid ? resolve(window.__mermaid) : reject(new Error('no mermaid')));
+    script.onerror = () => reject(new Error('mermaid unavailable'));
+    document.head.appendChild(script);
+  });
+  /* A rejected load must not be memoised for the rest of the window: the file
+     was assigned once and never cleared, so one transient failure turned off
+     diagrams until the app was restarted. Clear the memo and take the dead
+     <script> back out of the document so the next document can retry. */
+  mermaidPromise = attempt.catch((err) => {
+    mermaidPromise = null;
+    try { script?.remove(); } catch {}
+    throw err;
   });
   return mermaidPromise;
+}
+
+/** True in a build that could never load mermaid.js, however many times it tries. */
+function mermaidUnsupportedHere() {
+  /* The packaged app and the served build both pull in sibling files; only the
+     inlined single-file page has nothing to load mermaid.js from. */
+  if (IS_TAURI) return false;
+  return !document.querySelector('link[rel="stylesheet"], script[src]');
+}
+
+function noteMermaidUnsupported(blocks) {
+  if (!mermaidUnsupportedHere()) return;
+  for (const code of blocks) {
+    const pre = code.parentElement;
+    if (!pre) continue;
+    const note = document.createElement('p');
+    note.className = 'mermaid-note';
+    note.style.cssText = 'margin:0 0 12px;font-size:12.5px;color:var(--faint)';
+    note.textContent = 'Diagrams need Mermaid, which this single-file build does not include. Open the file in the desktop app to see them.';
+    pre.insertAdjacentElement('afterend', note);
+  }
+}
+
+/** Mermaid's palette is global state, and the theme can change while a batch of
+ *  diagrams is still drawing — so it is set per diagram, not captured once. */
+function initMermaidTheme(mermaid) {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const explicit = root.getAttribute('data-theme');
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    theme: (explicit === 'dark' || (!explicit && dark)) ? 'dark' : 'default',
+  });
 }
 
 let mermaidSeq = 0;
@@ -89,27 +133,27 @@ async function renderMermaid() {
   try {
     mermaid = await loadMermaid();
   } catch {
-    return; /* leave the code blocks exactly as they are */
+    /* leave the code blocks exactly as they are, but say why in a build that
+       has no way to ever load Mermaid */
+    if (current()) noteMermaidUnsupported(blocks);
+    return;
   }
 
   if (!current()) return;
-  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-  const explicit = root.getAttribute('data-theme');
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'strict',
-    theme: (explicit === 'dark' || (!explicit && dark)) ? 'dark' : 'default',
-  });
 
   for (const code of blocks) {
     const source = code.textContent;
     try {
+      initMermaidTheme(mermaid);
       const { svg } = await mermaid.render('mmd-' + ++mermaidSeq, source);
       if (!current()) return;
       const figure = document.createElement('div');
       figure.className = 'mermaid-figure';
       figure.dataset.source = source;
-      figure.innerHTML = svg;
+      /* Defence in depth. Mermaid's own strict mode is the real boundary — it
+         disables htmlLabels, so no foreignObject is produced — but diagram
+         markup is still foreign content heading for this document. */
+      figure.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
       code.parentElement.replaceWith(figure);
     } catch {
       if (!current()) return;
@@ -239,7 +283,7 @@ async function idbGet(k) {
    is deltaY 100, so 0.0022 lands on ~25% per notch — roughly a browser step.
    Trackpad pinch arrives as many small deltas and stays smooth at any speed. */
 const WHEEL_BASE = 0.0022;
-const DEFAULTS = { zoomSpeed: 1, textSize: 17, lineHeight: 1.68, invertZoom: false, openIn: 'tab', closeScope: 'tab', restoreTabs: false };
+const DEFAULTS = { zoomSpeed: 1, textSize: 17, lineHeight: 1.68, invertZoom: false, openIn: 'tab', closeScope: 'tab', restoreTabs: false, updateOnStart: true };
 let cfg = Object.assign({}, DEFAULTS, store.get('cfg', {}) || {});
 
 /** % change a single mouse-wheel notch produces at the current speed. */
@@ -247,7 +291,21 @@ function notchPercent() {
   return Math.round((Math.exp(100 * WHEEL_BASE * cfg.zoomSpeed) - 1) * 100);
 }
 
-function applyCfg({ remeasure = true, save = true } = {}) {
+/**
+ * Persist only the keys this call changed.
+ *
+ * Every window of the app is same-origin, so two windows share one localStorage.
+ * Writing this window's whole in-memory `cfg` would silently roll back whatever
+ * the other window just changed, so the stored object is re-read here and only
+ * the named keys are merged over it.
+ */
+function saveCfgFields(changed) {
+  const next = Object.assign({}, store.get('cfg', {}) || {});
+  for (const k of changed) next[k] = cfg[k];
+  store.set('cfg', next);
+}
+
+function applyCfg({ remeasure = true, save = true, changed = null } = {}) {
   cfg.zoomSpeed = Math.min(4, Math.max(0.25, Number(cfg.zoomSpeed) || 1));
   cfg.textSize = Math.min(26, Math.max(13, Number(cfg.textSize) || 17));
   cfg.lineHeight = Math.min(2.1, Math.max(1.3, Number(cfg.lineHeight) || 1.68));
@@ -255,6 +313,8 @@ function applyCfg({ remeasure = true, save = true } = {}) {
   cfg.openIn = cfg.openIn === 'window' ? 'window' : 'tab';
   cfg.closeScope = cfg.closeScope === 'window' ? 'window' : 'tab';
   cfg.restoreTabs = !!cfg.restoreTabs;
+  /* Default on, so anything but an explicit `false` keeps today's behaviour. */
+  cfg.updateOnStart = cfg.updateOnStart !== false;
 
   root.style.setProperty('--base-size', cfg.textSize + 'px');
   root.style.setProperty('--line-height', String(cfg.lineHeight));
@@ -264,6 +324,12 @@ function applyCfg({ remeasure = true, save = true } = {}) {
   $('#cfg-lineheight').value = String(cfg.lineHeight);
   $('#cfg-invert').checked = cfg.invertZoom;
   $('#cfg-restore').checked = cfg.restoreTabs;
+  $('#cfg-update-on-start').checked = cfg.updateOnStart;
+  /* The hint is overwritten by the next check, so this only has to describe the
+     state before one has happened. Keep it honest with the checkbox. */
+  $('#cfg-update-hint').textContent = cfg.updateOnStart
+    ? 'Checked automatically when the app starts'
+    : 'Not checked automatically — use the button';
   $('#cfg-openin').querySelectorAll('button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.val === cfg.openIn)));
   $('#cfg-openin-hint').textContent = cfg.openIn === 'window'
     ? 'Each file you open gets its own window'
@@ -277,15 +343,35 @@ function applyCfg({ remeasure = true, save = true } = {}) {
   $('#cfg-textsize-val').textContent = cfg.textSize + 'px';
   $('#cfg-lineheight-val').textContent = cfg.lineHeight.toFixed(2);
 
-  if (save) store.set('cfg', cfg);
+  if (save) saveCfgFields(changed || Object.keys(cfg));
   if (remeasure) measure();
 }
 
+function settingsOpen() { return $('#settings').classList.contains('on'); }
+
+/* Whether the user is actually working inside the panel. Set while focus is in
+   it, so closing restores focus to the trigger for a keyboard user but leaves a
+   mouse user who clicked somewhere else alone. */
+let settingsHadFocus = false;
+
 function toggleSettings(force) {
-  const on = force ?? !$('#settings').classList.contains('on');
+  const on = force ?? !settingsOpen();
+  /* Both panels are fixed at the same corner, so they may never be open
+     together — one closes the other. */
+  if (on && findBarOpen()) closeFind();
   $('#settings').classList.toggle('on', on);
   $('#btn-settings').setAttribute('aria-pressed', String(on));
-  if (on) els.chrome.classList.remove('hidden');
+  if (!on) {
+    if (settingsHadFocus) { settingsHadFocus = false; $('#btn-settings').focus(); }
+    return;
+  }
+  els.chrome.classList.remove('hidden');
+  /* Focusing the first control fires focusin, which is what arms the restore. */
+  settingsFocusables()[0]?.focus();
+}
+
+function settingsFocusables() {
+  return [...$('#settings').querySelectorAll('input, button, select, [tabindex]')].filter((el) => !el.disabled);
 }
 
 /* ---------- toast ---------- */
@@ -342,9 +428,11 @@ async function checkForUpdate({ manual = false } = {}) {
 
   if (manual) $('#cfg-update-hint').textContent = 'Checking…';
   updateBusy = true;
+  /* Record the attempt, not the outcome. Written only on success, a permanently
+     unreachable endpoint was retried on every single launch, forever. */
+  store.set('updateCheckedAt', Date.now());
   try {
     const found = await checkUpdate();
-    store.set('updateCheckedAt', Date.now());
     if (found) {
       pendingUpdate = found;
       /* A version the user already said no to stays dismissed until the next one. */
@@ -672,11 +760,44 @@ const COPY_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 
 /* Obsidian / Jekyll / Hugo / Astro all open with a YAML block. Left in place
    it parses as a horizontal rule plus a bogus heading that then pollutes the
-   outline, so strip it before the parser ever sees it. */
-const FRONT_MATTER = /^﻿?(?:---|\+\+\+)[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\+\+\+)[ \t]*(?:\r?\n|$)/;
+   outline, so strip it before the parser ever sees it.
+
+   This is a line scan rather than one regex because a regex cannot tell a real
+   closing fence from a `---` that is just content: a document opening with `---`
+   used to lose everything up to the next `---` anywhere, a `+++` was allowed to
+   close a `---` block, and a `---` inside a fenced code block ended the "front
+   matter" early and left a stray fence that turned the rest of the file into one
+   code block. So: the closing fence must match the opening one, and fenced code
+   blocks in between are skipped entirely. A document with no matching pair comes
+   back byte-identical. */
+const FM_OPEN = /^(\uFEFF?)(---|\+\+\+)[ \t]*\r?\n/;
+const FM_FENCE = /^(---|\+\+\+)[ \t]*$/;
+const FM_CODE_FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
 function stripFrontMatter(text) {
-  return text.replace(FRONT_MATTER, '');
+  const open = text.match(FM_OPEN);
+  if (!open) return text;
+  /* Keep each line's own terminator so a stripped document is reassembled
+     byte-for-byte rather than re-joined with a guessed newline. */
+  const lines = text.match(/[^\n]*\n|[^\n]+/g) || [];
+  const marker = open[2];
+  let inFence = false;
+  let fenceChar = '';
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].replace(/\r?\n$/, '');
+    const code = line.match(FM_CODE_FENCE);
+    if (code) {
+      /* Inside a fenced block nothing closes the front matter, so a document
+         whose own example contains `---` keeps its metadata intact. */
+      if (!inFence) { inFence = true; fenceChar = code[1][0]; }
+      else if (code[1][0] === fenceChar) inFence = false;
+      continue;
+    }
+    if (inFence) continue;
+    const close = line.match(FM_FENCE);
+    if (close && close[1] === marker) return lines.slice(i + 1).join('');
+  }
+  return text;
 }
 
 function joinPath(dir, rel) {
@@ -710,6 +831,80 @@ function resolveImages() {
   });
 }
 
+/* ---------- links ----------
+   Every link shape the parser can produce is decided here, because a click that
+   is left to the browser navigates the window off the app page: the tab set, the
+   outline, the scroll position and the live-reload watch all go with it. Worse,
+   an href that resolves back to this app's own page — `index.html?file=<path>` —
+   would make the boot code read an arbitrary local path, and same-origin
+   navigation keeps the webview's IPC privileges. So nothing below is allowed to
+   reach default navigation except an in-page `#` anchor and, in a plain browser,
+   an `http(s)` link opened in a new tab. */
+const DOC_EXT = /\.(?:md|markdown|mdown|mkd|mdx|txt)$/i;
+const EXTERNAL_SCHEME = /^(?:https?|mailto|tel):/i;
+const ANY_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+
+/** `protocol//host`, which stays meaningful for `tauri://` where `origin` is opaque. */
+function urlRoot(u) {
+  return u.protocol + '//' + u.host;
+}
+
+/** Resolve an href against the current page, or null if it is unparseable. */
+function resolveHref(href) {
+  const base = location && location.href ? location.href : undefined;
+  try { return new URL(href, base); } catch { return null; }
+}
+
+/**
+ * Turn a link target into a native path. `file:` URLs are decoded and made
+ * absolute; a relative link is taken against the current document's folder, the
+ * same rule the relative-image resolver uses.
+ */
+function linkToLocalPath(path) {
+  let p = path;
+  if (/^file:/i.test(p)) {
+    const u = resolveHref(p);
+    if (!u) return null;
+    p = decodeURIComponent(u.pathname);
+    /* A Windows file URL is /C:/dir/file.md — the leading slash is not part of the path. */
+    if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1);
+  } else {
+    try { p = decodeURIComponent(p); } catch {}
+  }
+  if (isAbsolutePath(p)) return p;
+  return state.docDir ? joinPath(state.docDir, p) : p;
+}
+
+/**
+ * Classify an href so render() can cancel the click unconditionally.
+ * @returns {{kind:'anchor'|'top'|'external'|'doc'|'refuse'|'unsupported', path?:string}}
+ */
+function classifyLink(href) {
+  if (href.startsWith('#')) return { kind: 'anchor' };
+  if (!href.trim()) return { kind: 'top' };
+  if (EXTERNAL_SCHEME.test(href)) return { kind: 'external' };
+  /* Protocol-relative: a remote host, which is not a document and not this app. */
+  if (href.startsWith('//')) return { kind: 'unsupported' };
+  /* Drop any fragment and query before testing the extension: `index.html?file=x.md`
+     ends in a markdown path but points back at this app, not at a document. */
+  const bare = href.split('#')[0].split('?')[0];
+  if (bare && DOC_EXT.test(bare) && (!ANY_SCHEME.test(bare) || /^file:/i.test(bare))) {
+    const path = linkToLocalPath(bare);
+    return path ? { kind: 'doc', path } : { kind: 'unsupported' };
+  }
+  /* Refuse anything that resolves to this app's own page. Blunt on purpose: a
+     relative link into the app's own folder cannot open a document anyway, and
+     the `?file=` re-entry above is the case that must never be reachable. */
+  const target = resolveHref(href);
+  const self = resolveHref(location && location.href ? location.href : '');
+  if (target && self) {
+    return urlRoot(target) === urlRoot(self) ? { kind: 'refuse' } : { kind: 'unsupported' };
+  }
+  /* With no resolvable page URL, a scheme-less href is a same-origin reference
+     by definition, so refuse it rather than guess. */
+  return ANY_SCHEME.test(href) ? { kind: 'unsupported' } : { kind: 'refuse' };
+}
+
 function render(text) {
   renderRevision++;
   const current = captureRenderGuard();
@@ -717,7 +912,12 @@ function render(text) {
   els.doc.innerHTML = DOMPurify.sanitize(dirty, { ADD_ATTR: ['target', 'id'] });
 
   const used = new Set();
-  const heads = [...els.doc.querySelectorAll('h1, h2, h3, h4')];
+  /* The marked-footnote plugin injects its own `<h2 id="footnote-label" class="sr-only">Footnotes</h2>`
+     into the footnotes section. That heading is not the author's content, so it
+     gets no id, no anchor and no outline entry. (The class that visually hides
+     it is styled in app.css, not here.) */
+  const heads = [...els.doc.querySelectorAll('h1, h2, h3, h4, h5, h6')]
+    .filter((h) => !h.closest('section.footnotes, [data-footnotes], .footnotes'));
   state.heads = heads.map((h) => {
     const title = h.textContent.trim();
     const id = slugify(title, used);
@@ -733,7 +933,12 @@ function render(text) {
   });
 
   els.doc.querySelectorAll('pre code').forEach((c) => {
-    try { hljs.highlightElement(c); } catch {}
+    /* highlight.js has no Mermaid grammar, so it auto-detects a diagram as some
+       arbitrary language, paints it in the wrong colours and logs a warning —
+       on every render, just before Mermaid replaces the block. */
+    if (!c.classList.contains('language-mermaid')) {
+      try { hljs.highlightElement(c); } catch {}
+    }
     const pre = c.parentElement;
     pre.style.position = 'relative';
     const btn = document.createElement('button');
@@ -755,7 +960,15 @@ function render(text) {
 
   els.doc.querySelectorAll('a[href]').forEach((a) => {
     const href = a.getAttribute('href') || '';
-    if (/^https?:/i.test(href)) {
+    const route = classifyLink(href);
+    if (route.kind === 'anchor') {
+      a.addEventListener('click', (e) => {
+        const t = els.doc.querySelector('#' + CSS.escape(href.slice(1)));
+        if (t) { e.preventDefault(); scrollToEl(t); }
+      });
+      return;
+    }
+    if (route.kind === 'external') {
       if (IS_TAURI) {
         /* The webview refuses target=_blank, so hand the URL to the OS. */
         a.addEventListener('click', (e) => {
@@ -763,15 +976,33 @@ function render(text) {
           openUrl(href).catch(() => { if (current()) toast('Could not open link'); });
         });
       } else {
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
+        /* A plain browser can do this itself — but only for http(s); mailto: and
+           tel: still go through window.open so no href other than an in-page
+           anchor ever reaches default navigation. */
+        if (/^https?:/i.test(href)) {
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          return;
+        }
+        a.addEventListener('click', (e) => {
+          e.preventDefault();
+          try { window.open(href, '_blank', 'noopener'); }
+          catch { if (current()) toast('Could not open link'); }
+        });
       }
-    } else if (href.startsWith('#')) {
-      a.addEventListener('click', (e) => {
-        const t = els.doc.querySelector('#' + CSS.escape(href.slice(1)));
-        if (t) { e.preventDefault(); scrollToEl(t); }
-      });
+      return;
     }
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (route.kind === 'doc') {
+        if (IS_TAURI) openPath(route.path).catch(() => { if (current()) toast('Could not open that file'); });
+        else if (current()) toast('Relative links only work in the desktop app');
+        return;
+      }
+      if (route.kind === 'top') { els.scroller.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+      if (route.kind === 'refuse') toast('Blocked: that link points back at the app');
+      else toast('Cannot open that link');
+    });
   });
 
   renderMath();
@@ -789,7 +1020,9 @@ function render(text) {
   buildOutline();
   updateDocMeta(text);
   measure();
-  renderMermaid();
+  /* Diagrams finish after this call returns; the catch keeps a failure here
+     from becoming an unhandled rejection. */
+  renderMermaid().catch(() => {});
 }
 
 /** Word count and reading time for the toolbar. */
@@ -946,6 +1179,12 @@ function dirOf(path, name) {
  * `allowNewWindow` is what makes the "open files in" setting work: an
  * externally-triggered open (file association, drag-drop, the Open dialog)
  * may spawn its own window, whereas restoring tabs at startup must not.
+ *
+ * @returns {Promise<boolean>} true when this call actually opened the file
+ *   somewhere new (a tab, or a window when `allowNewWindow` applies), false when
+ *   the path was already open and this call only selected the existing tab. A
+ *   caller that needs to know whether anything was really restored has to use
+ *   the return value: the already-open case resolves normally.
  */
 async function openPath(path, { allowNewWindow = true } = {}) {
   /* already open? just go to it — never open the same file twice */
@@ -953,12 +1192,12 @@ async function openPath(path, { allowNewWindow = true } = {}) {
   if (existing) {
     activateTab(existing.id);
     try { await getCurrentWindow().setFocus(); } catch {}
-    return;
+    return false;
   }
 
   if (allowNewWindow && IS_TAURI && cfg.openIn === 'window' && tabs.length > 0) {
     await openInNewWindow(path);
-    return;
+    return true;
   }
 
   const text = await invoke('read_text_file', { path });
@@ -970,7 +1209,7 @@ async function openPath(path, { allowNewWindow = true } = {}) {
   if (committed) {
     activateTab(committed.id);
     try { await getCurrentWindow().setFocus(); } catch {}
-    return;
+    return false;
   }
 
   const name = baseName(path);
@@ -981,6 +1220,7 @@ async function openPath(path, { allowNewWindow = true } = {}) {
   store.set('lastPath', path);
   showActiveTab();
   els.scroller.focus({ preventScroll: true });
+  return true;
 }
 
 /** Spawn a second app window already showing `path`. */
@@ -1294,6 +1534,8 @@ function findStep(dir) {
 }
 
 function openFind() {
+  /* Only one fixed panel at a time — they overlap in the same corner. */
+  if (settingsOpen()) toggleSettings(false);
   $('#find').classList.add('on');
   $('#btn-find').setAttribute('aria-pressed', 'true');
   els.chrome.classList.remove('hidden');
@@ -1314,7 +1556,7 @@ function closeFind() {
 $('#find-input').addEventListener('input', (e) => runFind(e.target.value));
 $('#find-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); findStep(e.shiftKey ? -1 : 1); }
-  else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); }
 });
 $('#find-next').addEventListener('click', () => findStep(1));
 $('#find-prev').addEventListener('click', () => findStep(-1));
@@ -1333,11 +1575,17 @@ function renderTabs() {
   bar.innerHTML = '';
 
   for (const t of tabs) {
+    const selected = t.id === state.id;
     const el = document.createElement('div');
     el.className = 'tab';
+    el.setAttribute('id', 'tab-' + t.id);
     el.setAttribute('role', 'tab');
-    el.setAttribute('aria-selected', String(t.id === state.id));
-    el.dataset.watching = t.id === state.id && watchTimer ? 'yes' : 'no';
+    el.setAttribute('aria-selected', String(selected));
+    el.setAttribute('aria-controls', 'doc');
+    /* Roving tabindex: the strip is a single tab stop, and the arrows move
+       within it. The close button is not a stop of its own (see below). */
+    el.tabIndex = selected ? 0 : -1;
+    el.dataset.watching = selected && watchTimer ? 'yes' : 'no';
     el.title = t.path || t.name;
 
     const dot = document.createElement('span');
@@ -1351,6 +1599,11 @@ function renderTabs() {
     close.className = 'tab-close';
     close.type = 'button';
     close.setAttribute('aria-label', `Close ${t.name}`);
+    /* Not a focus stop: the strip is one tab stop, and an 18px button that a
+       keyboard user has to arrow past on every tab is worse than none. The
+       mouse and middle-click paths are unchanged; Delete closes the focused
+       tab. */
+    close.tabIndex = -1;
     close.innerHTML = CLOSE_ICON;
     close.addEventListener('click', (e) => { e.stopPropagation(); closeTab(t.id); });
 
@@ -1360,9 +1613,40 @@ function renderTabs() {
     bar.appendChild(el);
   }
 
+  /* The panel is the target of every tab, and is named by the selected one. */
+  if (tabs.length) els.doc.setAttribute('aria-labelledby', 'tab-' + state.id);
+
   const active = bar.querySelector('.tab[aria-selected="true"]');
   active?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
+
+/** Focus the selected tab. The strip is rebuilt on every switch, so focus has
+ *  to be put back after a move rather than kept. */
+function focusSelectedTab() {
+  $('#tabbar').querySelector('.tab[aria-selected="true"]')?.focus();
+}
+
+/* Arrow keys, Home, End and Delete — scoped to the strip, so they never fight
+   the document's own arrow scrolling or the Find box. */
+$('#tabbar').addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const i = tabs.findIndex((t) => t.id === state.id);
+  if (i === -1) return;
+  let next;
+  if (e.key === 'ArrowRight') next = (i + 1) % tabs.length;
+  else if (e.key === 'ArrowLeft') next = (i - 1 + tabs.length) % tabs.length;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = tabs.length - 1;
+  else if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    closeTab(state.id);
+    focusSelectedTab();
+    return;
+  } else return;
+  e.preventDefault();
+  activateTab(tabs[next].id);
+  focusSelectedTab();
+});
 
 /** Remember where we were before leaving a tab. */
 function stashScroll() {
@@ -1502,9 +1786,19 @@ async function reopenClosed() {
   const paths = cleanPaths(stack.pop());
   store.set('closed', stack);
   let opened = 0;
+  const failed = [];
   for (const p of paths) {
-    try { await openPath(p, { allowNewWindow: false }); opened++; } catch { /* moved or deleted */ }
+    /* Already-open paths only select a tab: they are not failures, but do
+       not count as genuinely reopened either. */
+    try {
+      if (await openPath(p, { allowNewWindow: false })) opened++;
+    } catch {
+      failed.push(p); /* moved or deleted */
+    }
   }
+  /* Put back only the paths that genuinely failed, so a partially-restored
+     group keeps its remainder recoverable. */
+  if (failed.length) rememberClosed(failed);
   if (!opened) toast('Could not reopen that file');
 }
 
@@ -1541,21 +1835,22 @@ async function stepFile(dir) {
 /* ---------- appearance ---------- */
 const THEMES = ['auto', 'light', 'dark'];
 let theme = window.__mdvTheme.read();
-function applyTheme(t, announce) {
+function applyTheme(t, announce, save = true) {
   theme = window.__mdvTheme.apply(t);
-  store.set('theme', theme);
+  if (save) store.set('theme', theme);
   $('#btn-theme').setAttribute('aria-pressed', String(theme !== 'auto'));
   $('#btn-theme').title = 'Theme: ' + theme + ' (t)';
-  refreshMermaidTheme();
+  /* Diagrams are re-rendered after the change, which finishes later. */
+  refreshMermaidTheme().catch(() => {});
   if (announce) toast('Theme: ' + theme);
 }
 
 const WIDTHS = ['normal', 'wide', 'full'];
 let width = store.get('width', 'normal');
-function applyWidth(w, announce) {
+function applyWidth(w, announce, save = true) {
   width = WIDTHS.includes(w) ? w : 'normal';
   root.setAttribute('data-width', width);
-  store.set('width', width);
+  if (save) store.set('width', width);
   $('#btn-width').setAttribute('aria-pressed', String(width !== 'normal'));
   $('#btn-width').title = 'Width: ' + width + ' (w)';
   measure();
@@ -1563,10 +1858,10 @@ function applyWidth(w, announce) {
 }
 
 let font = store.get('font', 'sans');
-function applyFont(f, announce) {
+function applyFont(f, announce, save = true) {
   font = f === 'serif' ? 'serif' : 'sans';
   root.setAttribute('data-font', font);
-  store.set('font', font);
+  if (save) store.set('font', font);
   $('#btn-font').setAttribute('aria-pressed', String(font === 'serif'));
   $('#btn-font').title = 'Font: ' + font + ' (f)';
   measure();
@@ -1574,14 +1869,43 @@ function applyFont(f, announce) {
 }
 
 let outlineOn = store.get('outline', false);
-function applyOutline(on, announce) {
+function applyOutline(on, announce, save = true) {
   outlineOn = !!on;
   root.setAttribute('data-outline', outlineOn ? 'on' : 'off');
-  store.set('outline', outlineOn);
+  if (save) store.set('outline', outlineOn);
   $('#btn-outline').setAttribute('aria-pressed', String(outlineOn));
   syncOutlineActive();
   if (announce) toast(outlineOn ? 'Outline shown' : 'Outline hidden');
 }
+
+/* Another window of this app is same-origin, so its `storage` write genuinely
+   arrives here. Re-read and repaint without writing back — writing from inside
+   this handler would bounce straight back and could ping-pong. `session` and
+   `closed` are deliberately absent: both are re-read immediately before each
+   write, so a listener there would only fight the write path. */
+window.addEventListener('storage', (e) => {
+  if (!e || !String(e.key || '').startsWith('mdv.')) return;
+  switch (e.key.slice(4)) {
+    case 'cfg':
+      cfg = Object.assign({}, DEFAULTS, store.get('cfg', {}) || {});
+      break;
+    case 'theme':
+      applyTheme(store.get('theme', 'auto'), false, false);
+      break;
+    case 'width':
+      applyWidth(store.get('width', 'normal'), false, false);
+      break;
+    case 'font':
+      applyFont(store.get('font', 'sans'), false, false);
+      break;
+    case 'outline':
+      applyOutline(store.get('outline', false), false, false);
+      break;
+    default:
+      return;
+  }
+  applyCfg({ remeasure: false, save: false });
+});
 
 /* ---------- scroll behaviour ---------- */
 let lastScroll = 0;
@@ -1609,17 +1933,62 @@ window.addEventListener('mousemove', (e) => {
   if (e.clientY < 56) els.chrome.classList.remove('hidden');
 });
 
+/* ---------- printing ----------
+   window.print() is a silent no-op on Windows — WebView2 does not implement it
+   — so printing is routed natively: the app's own `print_windows` command on
+   Windows, the Tauri webview window's print() on macOS and Linux (where wry
+   reaches a real native dialog), and the browser's own dialog on the web.
+   A failure is reported, never swallowed: a button that silently does nothing
+   is the defect this replaces. */
+const IS_WINDOWS = /win/i.test(`${navigator.userAgent || ''} ${navigator.platform || ''}`);
+
+async function printDocument() {
+  try {
+    if (!IS_TAURI) { window.print(); return; }
+    if (IS_WINDOWS) { await invoke('print_windows'); return; }
+    await getCurrentWebviewWindow().print();
+  } catch {
+    toast('Could not open the print dialog');
+  }
+}
+
+/* Input types that are not text entry: a focused slider or checkbox is a
+   control the user is operating, not typing into, so the bare-key shortcuts
+   stay available there. */
+const NON_TEXT_INPUT = new Set(['button', 'checkbox', 'color', 'file', 'image', 'radio', 'range', 'reset', 'submit']);
+
+/** True when a bare keypress would be consumed as typing or as a button press. */
+function inTextEntry(target) {
+  if (!target) return false;
+  if (target.isContentEditable) return true;
+  const tag = (target.tagName || '').toLowerCase();
+  if (tag === 'textarea') return true;
+  if (tag === 'input') return !NON_TEXT_INPUT.has((target.type || '').toLowerCase());
+  /* Buttons (including the settings radio groups) and selects have no text to
+     type, but a bare letter on one is just as mysterious as typing. */
+  return tag === 'button' || tag === 'select';
+}
+
 /* ---------- keyboard ---------- */
 window.addEventListener('keydown', (e) => {
-  /* Escape works even from inside the settings panel's own controls */
+  const mod = e.ctrlKey || e.metaKey;
+
+  /* Escape works even from inside the settings panel's own controls, and
+     closes exactly one thing: the Find box handles its own Escape and stops
+     the event there. */
   if (e.key === 'Escape') {
+    e.preventDefault();
     if (findBarOpen()) { closeFind(); return; }
-    toggleSettings(false);
+    if (settingsOpen()) { toggleSettings(false); return; }
     els.scroller.focus({ preventScroll: true });
     return;
   }
 
-  const mod = e.ctrlKey || e.metaKey;
+  /* Only bare keys are suppressed inside text entry. Modifier combinations and
+     function keys are app-wide, so a focused slider, checkbox or search box
+     cannot lock the user out of Ctrl+O, Ctrl+Tab, F5 and the rest. */
+  if (inTextEntry(e.target) && !mod && !e.altKey && !/^F\d+$/.test(e.key)) return;
+
   if (mod && e.key.toLowerCase() === 'w') {
     e.preventDefault();
     e.shiftKey ? closeWindow() : closeRequested();
@@ -1631,15 +2000,13 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
-  const tag = (e.target.tagName || '').toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
-
   if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomStep(1); return; }
   if (mod && (e.key === '-' || e.key === '_')) { e.preventDefault(); zoomStep(-1); return; }
   if (mod && e.key === '0') { e.preventDefault(); zoomAnimated(1); return; }
   if (mod && e.key === '9') { e.preventDefault(); zoomFitWidth(); return; }
   if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); openViaPicker(); return; }
   if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); openFind(); return; }
+  if (mod && e.key.toLowerCase() === 'p') { e.preventDefault(); printDocument(); return; }
   if (mod && e.key === 'Tab') { e.preventDefault(); stepTab(e.shiftKey ? -1 : 1); return; }
   if (mod && (e.key === 'PageDown' || e.key === 'PageUp')) {
     e.preventDefault();
@@ -1730,7 +2097,7 @@ $('#btn-outline').addEventListener('click', () => applyOutline(!outlineOn, false
 $('#btn-theme').addEventListener('click', () => applyTheme(THEMES[(THEMES.indexOf(theme) + 1) % 3], false));
 $('#btn-width').addEventListener('click', () => applyWidth(WIDTHS[(WIDTHS.indexOf(width) + 1) % 3], false));
 $('#btn-font').addEventListener('click', () => applyFont(font === 'sans' ? 'serif' : 'sans', false));
-$('#btn-print').addEventListener('click', () => window.print());
+$('#btn-print').addEventListener('click', printDocument);
 $('#btn-settings').addEventListener('click', (e) => { e.stopPropagation(); toggleSettings(); });
 $('#btn-fit').addEventListener('click', zoomFitWidth);
 
@@ -1738,7 +2105,7 @@ $('#btn-fit').addEventListener('click', zoomFitWidth);
 const bindRange = (id, key) => {
   $(id).addEventListener('input', (e) => {
     cfg[key] = Number(e.target.value);
-    applyCfg({ remeasure: key !== 'zoomSpeed' });
+    applyCfg({ remeasure: key !== 'zoomSpeed', changed: [key] });
   });
 };
 bindRange('#cfg-zoomspeed', 'zoomSpeed');
@@ -1746,23 +2113,27 @@ bindRange('#cfg-textsize', 'textSize');
 bindRange('#cfg-lineheight', 'lineHeight');
 $('#cfg-invert').addEventListener('change', (e) => {
   cfg.invertZoom = e.target.checked;
-  applyCfg({ remeasure: false });
+  applyCfg({ remeasure: false, changed: ['invertZoom'] });
 });
 $('#cfg-restore').addEventListener('change', (e) => {
   cfg.restoreTabs = e.target.checked;
-  applyCfg({ remeasure: false });
+  applyCfg({ remeasure: false, changed: ['restoreTabs'] });
+});
+$('#cfg-update-on-start').addEventListener('change', (e) => {
+  cfg.updateOnStart = e.target.checked;
+  applyCfg({ remeasure: false, changed: ['updateOnStart'] });
 });
 $('#cfg-openin').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-val]');
   if (!btn) return;
   cfg.openIn = btn.dataset.val;
-  applyCfg({ remeasure: false });
+  applyCfg({ remeasure: false, changed: ['openIn'] });
 });
 $('#cfg-closescope').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-val]');
   if (!btn) return;
   cfg.closeScope = btn.dataset.val;
-  applyCfg({ remeasure: false });
+  applyCfg({ remeasure: false, changed: ['closeScope'] });
 });
 $('#cfg-check').addEventListener('click', () => checkForUpdate({ manual: true }));
 $('#update-go').addEventListener('click', installUpdate);
@@ -1772,10 +2143,24 @@ $('#update-later').addEventListener('click', () => {
 });
 $('#cfg-reset').addEventListener('click', () => {
   cfg = Object.assign({}, DEFAULTS);
-  applyCfg();
+  applyCfg({ changed: Object.keys(DEFAULTS) });
   toast('Settings reset');
 });
 $('#settings').addEventListener('click', (e) => e.stopPropagation());
+/* Keep Tab inside the panel while it is open, and remember that the user is in
+   it so closing can hand focus back to the trigger. */
+$('#settings').addEventListener('focusin', () => { settingsHadFocus = true; });
+$('#settings').addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab' || !settingsOpen()) return;
+  const items = settingsFocusables();
+  if (!items.length) return;
+  const active = document.activeElement;
+  const inside = !!(active && active.closest && active.closest('#settings'));
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (e.shiftKey && (active === first || !inside)) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (active === last || !inside)) { e.preventDefault(); first.focus(); }
+});
 document.addEventListener('click', () => toggleSettings(false));
 $('#empty-open').addEventListener('click', openViaPicker);
 els.title.addEventListener('click', async () => {
@@ -1885,8 +2270,11 @@ if (IS_TAURI) {
   getVersion().then((v) => { $('#cfg-version').textContent = 'v' + v; }).catch(() => {});
   let bootLabel = 'main';
   try { bootLabel = getCurrentWindow().label; } catch {}
-  if (bootLabel === 'main') setTimeout(() => { checkForUpdate(); }, 3000);
+  /* The setting gates the automatic check only — the Settings button still
+     checks whenever it is pressed, which is what makes it a preference. */
+  if (bootLabel === 'main' && cfg.updateOnStart) setTimeout(() => { checkForUpdate(); }, 3000);
 } else {
   $('#cfg-update').style.display = 'none';
+  $('#cfg-update-start-field').style.display = 'none';
   $('#cfg-restore-field').style.display = 'none';
 }

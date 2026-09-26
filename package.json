@@ -2,14 +2,15 @@
   "name": "markdown-viewer",
   "version": "1.1.0",
   "description": "A markdown viewer that gets out of the way",
-  "main": "index.js",
   "scripts": {
+    "test": "node --test",
     "build": "node build.mjs",
     "start": "node build.mjs && node serve.mjs",
     "serve": "node serve.mjs",
     "tauri": "tauri",
     "app:dev": "tauri dev",
-    "app:build": "tauri build"
+    "app:build": "tauri build",
+    "icons": "node create-icon.mjs"
   },
   "keywords": [],
   "type": "module",
@@ -28,8 +29,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
-    "esbuild": "^0.28.2",
-    "sharp": "^0.35.4"
+    "esbuild": "^0.28.2"
   },
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0"

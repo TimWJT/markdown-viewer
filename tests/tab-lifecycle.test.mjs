@@ -222,6 +222,62 @@ test('native: closed tabs reopen most recent first with Ctrl+Shift+T', async () 
   assert.deepEqual(JSON.parse(h.storage.get('mdv.closed')), []);
 });
 
+test('native: a partially reopened three-path group retains only its failed path', async () => {
+  const paths = ['C:/fixture/A.md', 'C:/fixture/Missing.md', 'C:/fixture/C.md'];
+  const older = ['C:/fixture/Older.md'];
+  const h = createHarness({ saved: { closed: [older, paths] }, invoke: async (command, args) => {
+    if (command === 'file_mtime') return 1;
+    if (command === 'read_text_file') {
+      if (args.path === paths[1]) throw new Error('file moved');
+      return 'text:' + args.path;
+    }
+    throw new Error('Unexpected IPC: ' + command);
+  } });
+  await h.call('reopenClosed');
+  assert.deepEqual(Array.from(h.tabs, tab => tab.path), [paths[0], paths[2]]);
+  assert.deepEqual(JSON.parse(h.storage.get('mdv.closed')), [older, [paths[1]]]);
+  assert.deepEqual(h.notices, [], 'a partial success genuinely reopened documents');
+});
+
+for (const withFailure of [false, true]) {
+  test(`native: already-open paths are not retained${withFailure ? ' alongside a failure' : ''}`, async () => {
+    const path = 'C:/fixture/A.md';
+    const missing = 'C:/fixture/Missing.md';
+    const h = createHarness({ saved: { closed: [[path.toLowerCase(), ...(withFailure ? [missing] : [])]] },
+      invoke: async command => {
+        if (command === 'file_mtime') return 1;
+        throw new Error('file moved');
+      } });
+    const a = h.addTab({ name: 'A.md', path, text: 'A original' });
+    h.activate(a);
+    await h.call('reopenClosed');
+    assert.deepEqual(Array.from(h.tabs, tab => tab.path), [path]);
+    assert.deepEqual(JSON.parse(h.storage.get('mdv.closed')), withFailure ? [[missing]] : []);
+    assert.deepEqual(h.notices, ['Could not reopen that file'], 'selecting an existing tab is not a reopen');
+    assert.deepEqual(h.calls.filter(c => c.command === 'read_text_file').map(c => c.path), withFailure ? [missing] : []);
+  });
+}
+
+test('native: restoring a failed reopen preserves history added while awaiting the read', async () => {
+  const gate = deferred();
+  const missing = 'C:/fixture/Missing.md';
+  const older = ['C:/fixture/Older.md'];
+  const added = ['C:/fixture/Meanwhile.md'];
+  const h = createHarness({ saved: { closed: [older, [missing]] }, invoke: async command => {
+    if (command === 'read_text_file') return gate.promise;
+    if (command === 'file_mtime') return 1;
+    throw new Error('Unexpected IPC: ' + command);
+  } });
+  const work = h.call('reopenClosed');
+  await settle();
+  assert.deepEqual(JSON.parse(h.storage.get('mdv.closed')), [older], 'the attempted group is popped before awaiting');
+  h.call('rememberClosed', added);
+  gate.reject(new Error('file moved'));
+  await work;
+  assert.deepEqual(JSON.parse(h.storage.get('mdv.closed')), [older, added, [missing]]);
+  assert.deepEqual(h.notices, ['Could not reopen that file']);
+});
+
 test('native: simultaneous case-insensitive same-path opens create one tab', async () => {
   const gate = deferred();
   let reads = 0;

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, basename } from 'node:path';
+import { dirname, join, basename, resolve } from 'node:path';
 import { createHarness } from './helpers/source-harness.mjs';
 
 const project = new URL('../', import.meta.url);
@@ -75,7 +75,12 @@ test('build structure: both output shapes apply theme first; packaged JS stays d
     }] }),
     readFile: async path => readFileSync(path, 'utf8'),
     writeFile: async (path, text) => outputs.set(basename(path), text),
-    mkdir: async () => {}, fileURLToPath, dirname, join, Buffer,
+    mkdir: async () => {},
+    /* build.mjs now also cleans its output directories with rm() and guards
+     * that with resolve(). Both are satisfied in memory: the guard still runs
+     * for real, and nothing on disk is touched. */
+    resolve, rm: async () => {},
+    fileURLToPath, dirname, join, Buffer,
     console: { log() {} },
   });
   const buildSource = readFileSync(new URL('build.mjs', project), 'utf8')
@@ -100,7 +105,7 @@ test('build structure: both output shapes apply theme first; packaged JS stays d
   assert.doesNotMatch(standalone, /<script[^>]+src=/, 'no new sibling required by standalone');
   const app = readFileSync(new URL('src/main.js', project), 'utf8');
   assert.match(app, /import '\.\/startup\.js';/, 'fallback shares the exact bootstrap implementation');
-  assert.match(app, /s\.src = 'mermaid\.js'/);
+  assert.match(app, /\.src = 'mermaid\.js'/);
   const config = JSON.parse(readFileSync(new URL('src-tauri/tauri.conf.json', project), 'utf8'));
   assert.match(config.app.security.csp, /script-src 'self'/);
   assert.doesNotMatch(config.app.security.csp.split('script-src')[1].split(';')[0], /unsafe-inline/);

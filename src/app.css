@@ -5,10 +5,12 @@
   --fg: #24252a;
   --fg-strong: #101114;
   --muted: #6b6f76;
-  --faint: #9aa0a6;
+  /* 4.54:1 on --bg (was 2.55:1) — see the Implementation record for the maths. */
+  --faint: #707479;
   --border: #e5e5e2;
   --border-strong: #d3d3cf;
-  --accent: #2f6feb;
+  /* 4.54:1 on --bg (was 4.41:1) — this is every link in the document body. */
+  --accent: #2e6de8;
   --code-bg: #f4f4f1;
   --code-fg: #2b2d33;
   --mark: #fff3a3;
@@ -17,7 +19,8 @@
   --hl-keyword: #a626a4;
   --hl-string:  #4e8b3d;
   --hl-number:  #b26b00;
-  --hl-comment: #9199a3;
+  /* 4.52:1 on --code-bg (was 2.61:1) — code comments are body-sized text. */
+  --hl-comment: #6b7078;
   --hl-func:    #2f6feb;
   --hl-type:    #b26b00;
   --hl-attr:    #986801;
@@ -49,7 +52,7 @@
     --fg: #d3d5d9;
     --fg-strong: #f0f1f3;
     --muted: #8b9096;
-    --faint: #6b7076;
+    --faint: #7c8188;
     --border: #292b30;
     --border-strong: #383b41;
     --accent: #7aa2f7;
@@ -73,7 +76,7 @@
   --fg: #d3d5d9;
   --fg-strong: #f0f1f3;
   --muted: #8b9096;
-  --faint: #6b7076;
+  --faint: #7c8188;
   --border: #292b30;
   --border-strong: #383b41;
   --accent: #7aa2f7;
@@ -101,6 +104,41 @@ body {
   text-rendering: optimizeLegibility;
   overflow: hidden;
 }
+
+/* Visually hidden but still announced. Required by the output of the
+   marked-footnote plugin, which emits
+   <h2 id="footnote-label" class="sr-only">Footnotes</h2> as a label for
+   screen readers only; without this rule that heading renders visibly. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden; white-space: nowrap;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+}
+
+/* ---------- focus ---------- */
+/* Keyboard focus has to be visible: the webview default ring is thin, faint on
+   this palette, and clipped away entirely on the 18px tab close buttons. */
+.btn:focus-visible,
+.tab:focus-visible,
+.tab-close:focus-visible,
+.seg button:focus-visible,
+.recent-item:focus-visible,
+#zoomval:focus-visible,
+#outline a:focus-visible,
+#doc a:focus-visible,
+#find input:focus-visible,
+#settings input:focus-visible,
+#settings button:focus-visible,
+#scroller:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Tight spots: the tab strip scrolls (so an outset ring is cut off) and the
+   scroller is the whole page, so its ring is drawn inside the viewport. */
+.tab-close:focus-visible { outline-offset: 1px; }
+#find input:focus-visible { outline-offset: 1px; }
+#scroller:focus-visible { outline-offset: -3px; }
 
 /* ---------- chrome ---------- */
 #bar {
@@ -150,6 +188,12 @@ body {
 
 /* ---------- layout ---------- */
 #shell { display: flex; height: 100%; padding-top: var(--chrome-h); }
+/* The toolbar slides away on scroll down, so the space it held has to go with
+   it — otherwise 44-78px of dead background sits at the top of the viewport
+   and the document can never scroll under it. #shell follows #chrome as a
+   sibling, so the general sibling selector follows its hidden state without
+   requiring :has() or JavaScript changes. */
+#chrome.hidden ~ #shell { padding-top: 0; }
 :root[data-tabs="many"] { --chrome-h: 78px; }
 
 #outline {
@@ -292,7 +336,7 @@ body {
 #find.on { display: flex; }
 #find .find-icon { width: 15px; height: 15px; color: var(--faint); flex: none; margin-right: 5px; }
 #find input {
-  appearance: none; border: 0; outline: none; background: transparent;
+  appearance: none; border: 0; background: transparent;
   color: var(--fg); font: inherit; font-size: 13.5px;
   width: 190px; padding: 4px 2px;
 }
@@ -323,6 +367,10 @@ body {
   border-radius: 12px;
   box-shadow: var(--shadow);
   display: none;
+  /* The panel is ~750px tall: on a short window, or at 200% zoom, the Reset
+     button at the bottom was simply unreachable. Same pattern as #recent. */
+  max-height: calc(100vh - var(--chrome-h) - 20px);
+  overflow-y: auto;
 }
 #settings.on { display: block; }
 #settings .field { margin-bottom: 15px; }
@@ -399,7 +447,9 @@ body {
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 #doc pre {
-  margin: 1.3em 0; padding: 14px 16px; overflow-x: auto;
+  /* Extra room on the right for the copy button, which sits over the first
+     line and would otherwise cover its last few characters. */
+  margin: 1.3em 0; padding: 14px 46px 14px 16px; overflow-x: auto;
   background: var(--code-bg); border: 1px solid var(--border);
   border-radius: 9px; line-height: 1.55;
 }
@@ -441,6 +491,19 @@ h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor { opacity
 .hljs-strong { font-weight: 700; }
 .hljs-deletion { color: #d64545; }
 
+/* ---------- code copy button ---------- */
+/* The button's opacity is written inline by the render loop (0, then 1 on the
+   parent pre's mouseenter), so a plain rule cannot win — hence !important. */
+#doc .btn.copy {
+  background: var(--surface); border: 1px solid var(--border);
+  top: 6px; right: 6px;
+}
+#doc .btn.copy:focus-visible { opacity: 1 !important; }
+@media (hover: none) {
+  /* Touch devices never fire mouseenter, so it would never appear at all. */
+  #doc .btn.copy { opacity: 1 !important; }
+}
+
 /* ---------- scrollbars ---------- */
 #scroller::-webkit-scrollbar, #outline::-webkit-scrollbar, #doc pre::-webkit-scrollbar { width: 11px; height: 11px; }
 #scroller::-webkit-scrollbar-thumb, #outline::-webkit-scrollbar-thumb, #doc pre::-webkit-scrollbar-thumb {
@@ -477,8 +540,23 @@ h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor { opacity
   #title { max-width: 30vw; }
 }
 
+/* ---------- motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  /* The live-reload dot pulses forever while a file stays open, and the
+     scroller is always smooth — neither is motion the reader asked for. */
+  #live.on { animation: none; }
+  #scroller { scroll-behavior: auto; }
+  *, *::before, *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
 @media print {
-  #bar, #outline, #empty, #drop, #toast, #update { display: none !important; }
+  /* #chrome is a fixed, backdrop-filtered bar that CONTAINS the tab strip, so
+     with 2+ tabs open every printed page carried a row of tab shapes. */
+  #bar, #chrome, #outline, #empty, #drop, #find, #settings, #toast, #update { display: none !important; }
   body, #shell, #stage, #scroller { overflow: visible; height: auto; position: static; }
   #shell { padding-top: 0; }
   #canvas { width: auto !important; height: auto !important; }
@@ -555,6 +633,7 @@ h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor { opacity
   opacity: 0; transition: opacity .12s, background .12s;
 }
 .tab:hover .tab-close,
+.tab:focus-within .tab-close,
 .tab[aria-selected="true"] .tab-close { opacity: 1; }
 .tab-close:hover { background: color-mix(in srgb, var(--fg) 16%, transparent); color: var(--fg); }
 .tab-close svg { width: 11px; height: 11px; }

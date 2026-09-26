@@ -10,11 +10,17 @@ Grab an installer from the [Releases page](../../releases):
 
 | Platform | File | Size |
 |----------|------|------|
-| Windows | `Markdown Viewer_x64-setup.exe` | 2.3 MB |
-| macOS (Apple silicon) | `Markdown Viewer_aarch64.dmg` | ~6 MB |
-| macOS (Intel) | `Markdown Viewer_x64.dmg` | ~6 MB |
-| Linux | `.deb` / `.AppImage` | ~6 MB |
-| Any browser | `Markdown Viewer.html` | 505 KB, no install |
+| Windows | `Markdown Viewer_x64-setup.exe` | — |
+| macOS (Apple silicon) | `Markdown Viewer_aarch64.dmg` | — |
+| macOS (Intel) | `Markdown Viewer_x64.dmg` | — |
+| Linux | `.deb` / `.AppImage` | — |
+| Any browser | `Markdown Viewer.html` | 532 KB, no install |
+
+Installer sizes change with every build, and the only sizes this repository
+publishes are the ones for the exact release you are downloading — so the
+Releases page is the only place with a number to trust. The 532 KB figure is
+measured from the current build: `dist-standalone/Markdown Viewer.html` is
+544,849 bytes.
 
 Once installed, double-clicking any `.md` file opens it here.
 
@@ -48,11 +54,11 @@ Installers land in `src-tauri/target/release/bundle/`. `npm run app:dev` runs it
 | **Outline** | Sidebar built from headings, highlights the section you're reading. |
 | **Reading width** | Normal / wide / full-bleed. |
 | **Serif mode** | Switch to a serif face for long reading. |
-| **Print** | `Ctrl`+`P` gives clean PDF output with sensible page breaks. |
+| **Print** | `Ctrl`+`P` opens the native print dialog, so you can print or save a PDF. Print styles strip the toolbar, tab strip and Find box, keep code blocks and tables whole, and keep headings off the bottom of a page. On macOS and Linux that dialog is the real system one; on Windows it is WebView2's own print dialog, which is newer and has not yet been run on a real Windows machine. |
 | **Code** | Syntax highlighting for ~40 common languages, hover a block to copy it. |
 | **Find** | `Ctrl`+`F` searches the document, with match counts and wrap-around navigation. The webview has no find of its own, so this is the only way to search in the app. |
 | **Front matter** | YAML/TOML blocks are stripped instead of rendering as a stray rule and a bogus heading. |
-| **Local images** | Relative image paths resolve against the document folder. |
+| **Local images** | Relative image paths resolve against the document folder, for documents you keep inside your own user profile. The app is not allowed to read images from anywhere else on the machine, so an image beside a document on a USB stick or a network drive will not show. |
 | **Links** | External links open in your real browser, not inside the app window. |
 | **Window** | Size and position are remembered between launches. |
 | **Math** | LaTeX renders via Temml to MathML, which the browser draws natively — no font files to ship. |
@@ -64,7 +70,7 @@ Installers land in `src-tauri/target/release/bundle/`. `npm run app:dev` runs it
 | **Fit width** | One click scales the document to exactly fill the window. |
 | **Reading time** | Word count and estimated minutes in the toolbar. |
 
-Opens files by drag-and-drop, the Open button, or pasting markdown straight from the clipboard. Reopens the last file you were reading on launch.
+Opens files by drag-and-drop, the Open button, or pasting markdown straight from the clipboard. Starts clean: the app does not put your last files back on its own. `Ctrl`+`Shift` `T` brings back the last group of tabs you closed, and turning on **Reopen tabs from last time** in Settings does it for you at every launch.
 
 ## Keyboard
 
@@ -80,7 +86,7 @@ Opens files by drag-and-drop, the Open button, or pasting markdown straight from
 | `Ctrl` `1`–`8` | Jump to tab |
 | `Ctrl` `W` | Close tab, or the whole window — see settings |
 | `Ctrl` `Shift` `W` | Close the window and all its tabs |
-| `Ctrl` `Shift` `T` | Reopen the last closed tab, window, or previous session |
+| `Ctrl` `Shift` `T` | Reopen the last closed tab, window, or previous session (desktop only) |
 | `o` | Toggle outline |
 | `t` | Cycle theme |
 | `w` | Cycle reading width |
@@ -88,9 +94,16 @@ Opens files by drag-and-drop, the Open button, or pasting markdown straight from
 | `Ctrl` `F` | Find in document |
 | `F3` | Next match |
 | `F5` | Force reload from disk |
+| `Ctrl` `R` | Force reload from disk (same as `F5`) |
 | `,` | Open settings |
 | `Esc` | Close find or settings |
 | `Ctrl` `P` | Print or save as PDF |
+
+Two notes on the table. `Ctrl` `Tab` and `Ctrl` `PgDn` / `Ctrl` `PgUp` are in the
+handler, but macOS captures those three before the app ever sees them — they are
+in the table for parity and do nothing on a Mac. And `Ctrl` `Shift` `T` is
+desktop-only: in the browser builds there is no closed-tab history to restore, so
+the key does nothing there.
 
 ## Settings
 
@@ -105,13 +118,15 @@ The gear button (or `,`) opens a small panel. Everything applies live and persis
 | **Open files in** | New tab | new tab / new window |
 | **Ctrl+W closes** | This tab | this tab / all tabs |
 | **Reopen tabs from last time** | off | on: restore every window's tabs at startup |
+| **Check for updates on startup** | on | off: only check when you ask |
 | **Updates** | — | Check for updates |
 
 ## Updates
 
-The desktop app checks GitHub for a new release a few seconds after launch, at
-most once every six hours. If one exists, a bar appears at the bottom of the
-window offering to install it — nothing is downloaded until you click **Update**.
+The desktop app checks GitHub for a new release about three seconds after launch, at
+most once every six hours, and only while **Check for updates on startup** is on.
+If one exists, a bar appears at the bottom of the window offering to install it —
+nothing is downloaded until you click **Update**.
 **Later** dismisses that version until the next one ships. Settings has a
 **Check for updates** button for checking on demand, and shows the version you
 are running.
@@ -144,31 +159,37 @@ Zoom is now a CSS `transform: scale()` on the document, with a sibling element r
 
 ## Three ways to run it
 
-**The installed app** — everything works, including `.md` file association, live reload, and reopening the last file on launch.
+**The installed app** — everything works, including `.md` file association, live reload, `Ctrl` `Shift` `T`, and restoring tabs at startup if you turn that on in Settings.
 
 **Served over `http://` (`npm start`)** — everything works too. This is the development loop.
 
-**Double-clicking `Markdown Viewer.html`** — rendering, zoom, themes and settings all work. Browsers restrict some APIs on `file://` origins, so live reload and "reopen last file" may be unavailable. Opening files still works via the Open button and drag-and-drop.
+**Double-clicking `Markdown Viewer.html`** — rendering, zoom, themes and settings all work. Browsers restrict some APIs on `file://` origins, so live reload and the closed-tab history behind `Ctrl` `Shift` `T` are unavailable. Opening files still works via the Open button and drag-and-drop.
 
 ## Project layout
 
 ```
 src/index.html       markup + toolbar, with __CSS__ / __JS__ injection points
+src/startup.js       early theme apply, runs before the stylesheet
 src/app.css          design tokens, prose styles, syntax colours, print rules
 src/main.js          all app logic (browser and native share this file)
 src/mermaid-entry.js its own bundle, fetched on demand
 build.mjs            bundles + inlines everything into one HTML file
 serve.mjs            dev-only static server
-dist/                index.html + app.css + app.js  (what Tauri bundles)
-                     Markdown Viewer.html            (standalone, all inlined)
-                     mermaid.js                      (lazy, app only)
+tests/               node --test suite, run against the real src/main.js
+dist/                index.html + startup.js + app.css + app.js + mermaid.js
+                     (what Tauri bundles, and all it bundles)
+dist-standalone/     Markdown Viewer.html — the single-file download, built
+                     outside dist/ so it never ships inside the installer
 src-tauri/           the native shell
-  src/main.rs        four commands: read a path, stat it, list its siblings,
-                     and hand over argv[1] from a file-association launch
+  src/main.rs        seven commands: read a path, stat it, list its siblings,
+                     hand over argv[1] from a file-association launch, hand a
+                     file to a second window that asked for it, tell a window
+                     no external open is waiting, and open the WebView2 print
+                     dialog on Windows
   tauri.conf.json    window, bundle targets, .md file association
   capabilities/      permissions granted to the window
 assets/icon.svg      source art for every generated icon
-.github/workflows/   tags -> installers for all platforms
+.github/workflows/   tags -> installers for all platforms, on a draft release
 ```
 
 The frontend is platform-agnostic: `main.js` checks for `window.__TAURI_INTERNALS__`
@@ -188,9 +209,12 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-CI builds Windows, macOS (both architectures) and Linux installers, plus the
-standalone HTML, and attaches them to a **draft** release. Review it on the
-Releases page and hit publish.
+CI runs the test suite (`npm test`) and then builds Windows, macOS (both
+architectures) and Linux installers, plus the standalone HTML, and attaches them
+to a **draft** release. Review it on the Releases page and hit publish — nothing
+is ever published without you doing it. Running the workflow by hand from a
+branch still builds and tests, but attaches nothing, so a stray manual run
+cannot cut a release.
 
 ## Code signing
 
@@ -203,15 +227,15 @@ If you ever buy certificates, they slot into the existing workflow as repository
 
 ## A note on Mermaid
 
-Mermaid is 3.4 MB bundled — more than ten times the rest of the app. Inlining it would mean parsing 3.4 MB of JavaScript at every launch for documents that mostly contain no diagrams, so it is built as a separate `mermaid.js` fetched only when a document actually has one.
+Mermaid is 3.4 MB bundled — more than six times the rest of the app. Inlining it would mean parsing 3.4 MB of JavaScript at every launch for documents that mostly contain no diagrams, so it is built as a separate `mermaid.js` fetched only when a document actually has one.
 
-The practical consequence: **the installed app renders Mermaid; the standalone HTML file does not.** In the standalone build the fetch simply fails and a diagram stays a syntax-highlighted code block. That keeps the promise the standalone build exists for — one file, no siblings, no network.
+The practical consequence: **the installed app renders Mermaid; the standalone HTML file does not.** In the standalone build the fetch fails and a diagram stays a syntax-highlighted code block that says diagrams are not supported there, rather than looking broken. That keeps the promise the standalone build exists for — one file, no siblings, no network.
 
 Math and footnotes are inlined in both, costing about 210 KB together.
 
 ## Deliberately not included
 
-Editing, file trees, tabs, search across files, sync, plugins, wiki-links, graph view. Those are what make the other tools heavy. If you need them, use Obsidian.
+Editing, file trees, search across files, sync, plugins, wiki-links, graph view. Those are what make the other tools heavy. If you need them, use Obsidian.
 
 ## License
 

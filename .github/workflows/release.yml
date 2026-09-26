@@ -53,7 +53,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Test
+        run: npm test
+        timeout-minutes: 2
+
       - uses: tauri-apps/tauri-action@v0
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Signs the updater artifacts and writes latest.json onto the release.
@@ -76,7 +81,7 @@ jobs:
 
             Also attached: `Markdown Viewer.html`, the whole app as one file you can
             open in any browser with no installation at all.
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
 
@@ -92,12 +97,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Test
+        run: npm test
+        timeout-minutes: 2
       - run: npm run build
       - name: Attach the single-file build to the release
         uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
         with:
           tag_name: ${{ github.ref_name }}
-          draft: false
-          files: 'dist/Markdown Viewer.html'
+          draft: true
+          files: 'dist-standalone/Markdown Viewer.html'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
