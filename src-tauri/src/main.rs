@@ -202,6 +202,7 @@ fn route_external_opens(app: tauri::AppHandle, receiver: mpsc::Receiver<OpenMess
                         )
                         .title("Markdown Viewer")
                         .inner_size(1100.0, 820.0)
+                        .zoom_hotkeys_enabled(PAGE_RECEIVES_PINCH)
                         .build()
                         {
                             Ok(window) => Some(window),
@@ -469,24 +470,26 @@ async fn sibling_files(path: String) -> Result<Vec<String>, String> {
     .map_err(|e| e.to_string())?
 }
 
-// Do NOT call ICoreWebView2Settings5::SetIsPinchZoomEnabled(false) here.
+// Trackpad pinch on Windows. WebView2 reports a pinch to the page as a
+// ctrl+wheel WheelEvent, which the frontend claims (src/main.js, capture phase,
+// passive: false) to zoom the document on its own transform. That event only
+// exists while ICoreWebView2Settings5::IsPinchZoomEnabled is true.
 //
-// It is tempting: it stops WebView2 scaling the whole UI, toolbar included, on
-// a pinch. But that setting governs more than WebView2's own zoom — with pinch
-// disabled it also stops WebView2 translating the gesture into the ctrl+wheel
-// WheelEvent that is the *only* way the page ever learns about a pinch. The
-// frontend handles ctrl+wheel (src/main.js, capture phase, passive: false), so
-// disabling this setting does not hand the gesture to the frontend, it drops it
-// on the floor: pinch did nothing at all on Windows.
+// wry sets that flag from `zoom_hotkeys_enabled`, which Tauri defaults to
+// false, so every webview starts with pinch switched off and the page never
+// hears about the gesture. Flipping it afterwards through with_webview is not
+// enough either: WebView2 only applies the change "after the next navigation",
+// and the first page has already started loading by then. So every window is
+// built with zoom_hotkeys_enabled on Windows instead, which reaches WebView2
+// before the first navigation. The browser zoom it also enables (ctrl+wheel,
+// ctrl+plus/minus/0) never fires, because the frontend preventDefault()s all of
+// those and does its own zoom.
 //
-// Leaving the default (enabled) is what makes pinch arrive. The frontend stops
-// WebView2 from also zooming the page by calling preventDefault() on that same
-// event, which works because the listener is registered passive: false. So the
-// document zooms on its own transform and the toolbar stays put.
-//
-// macOS and Linux need none of this: WebKit and GTK deliver pinch as real
-// gesture* events and two-pointer touch input respectively, which the frontend
-// handles directly.
+// Windows only: on macOS and Linux the same option injects Tauri's own
+// keyboard-zoom script, and those platforms deliver pinch as gesture* events
+// and touch pointers, which the frontend already handles.
+// The frontend mirrors this in openInNewWindow().
+const PAGE_RECEIVES_PINCH: bool = cfg!(target_os = "windows");
 
 // Windows print. wry's `print()` only evaluates `window.print()` in the page,
 // which WebView2 does not implement, so printing is a silent no-op here. This
@@ -590,9 +593,19 @@ fn main() {
             _app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
-            // Nothing to do for pinch here: WebView2's pinch zoom stays enabled
-            // on purpose so the gesture reaches the page as ctrl+wheel. See the
-            // note above disable_builtin_pinch_zoom's old body.
+            // The main window is `create: false` in tauri.conf.json so it can be
+            // built here with pinch enabled. See PAGE_RECEIVES_PINCH.
+            let config = _app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|w| w.label == "main")
+                .ok_or("tauri.conf.json has no main window")?
+                .clone();
+            tauri::WebviewWindowBuilder::from_config(_app.handle(), &config)?
+                .zoom_hotkeys_enabled(PAGE_RECEIVES_PINCH)
+                .build()?;
             Ok(())
         })
         .manage(InitialFile(Mutex::new(initial)))

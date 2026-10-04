@@ -21,6 +21,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Markdown Viewer",
         "width": 1100,
         "height": 820,

@@ -1233,6 +1233,9 @@ async function openInNewWindow(path) {
       width: 1100,
       height: 820,
       dragDropEnabled: true,
+      /* Without this WebView2 starts with pinch off and a trackpad pinch never
+         reaches the wheel handler. See PAGE_RECEIVES_PINCH in main.rs. */
+      zoomHotkeysEnabled: IS_WINDOWS,
     });
     await new Promise((resolve, reject) => {
       w.once('tauri://created', resolve);

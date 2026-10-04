@@ -177,20 +177,36 @@ test('the touch and macOS pinch paths are still wired up and claimable', () => {
   assert.equal(move?.passive, false, 'the touch pinch must be able to preventDefault');
 });
 
-test('the native side does not disable WebView2 pinch zoom', () => {
-  /* The regression this whole file exists for. SetIsPinchZoomEnabled(false)
-     does not hand pinch to the frontend, it stops WebView2 emitting the
-     ctrl+wheel event the frontend listens for, so pinch does nothing at all
-     on Windows while every test above still passes. Nothing in Node can catch
-     that, so the native source is asserted directly.
+test('every Windows webview is created with WebView2 pinch enabled', () => {
+  /* The regression this whole file exists for, twice over. wry sets
+     IsPinchZoomEnabled from zoom_hotkeys_enabled, which Tauri defaults to
+     false, so a webview built without it never emits the ctrl+wheel event the
+     frontend listens for: pinch does nothing at all on Windows while every
+     test above still passes. The setting only applies after the next
+     navigation, so it has to be on at creation, for every window. Nothing in
+     Node can see that, so the sources are asserted directly.
 
-     Line comments are stripped first: the file discusses this exact call at
-     length, and prose about it must not read as a live call. */
-  const code = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8')
+     Line comments are stripped first: the file discusses these calls at
+     length, and prose about them must not read as live code. */
+  const rust = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8')
     .replace(/^\s*\/\/.*$/gm, '');
+  const conf = JSON.parse(readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'));
+  const js = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
 
-  assert.ok(
-    !/SetIsPinchZoomEnabled\s*\(\s*false\s*\)/.test(code),
-    'WebView2 pinch zoom must stay enabled or the page never sees the gesture',
-  );
+  assert.ok(!/SetIsPinchZoomEnabled\s*\(\s*false\s*\)/.test(rust),
+    'WebView2 pinch zoom must stay enabled or the page never sees the gesture');
+  assert.match(rust, /const PAGE_RECEIVES_PINCH: bool = cfg!\(target_os = "windows"\);/);
+
+  /* The main window would otherwise be built by Tauri from the config, with
+     pinch off, before setup() could touch it. */
+  const main = conf.app.windows.find(w => w.label === 'main');
+  assert.equal(main.create, false, 'main must be built in setup(), not from the config');
+
+  const builders = rust.match(/WebviewWindowBuilder::(new|from_config)\(/g) || [];
+  const enabled = rust.match(/\.zoom_hotkeys_enabled\(PAGE_RECEIVES_PINCH\)/g) || [];
+  assert.ok(builders.length >= 2, 'expected the main and external-open builders');
+  assert.equal(enabled.length, builders.length, 'every native window builder must enable pinch');
+
+  assert.match(js, /new WebviewWindow\([^;]*zoomHotkeysEnabled: IS_WINDOWS/s,
+    'windows opened from the frontend need pinch enabled too');
 });
