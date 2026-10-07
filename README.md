@@ -24,7 +24,15 @@ measured from the current build: `dist-standalone/Markdown Viewer.html` is
 
 Once installed, double-clicking any `.md` file opens it here.
 
-> **First launch shows a warning.** The builds are not code-signed, so Windows SmartScreen says the publisher is unknown — click **More info → Run anyway**. On macOS, right-click the app and choose **Open**, then confirm. See [Code signing](#code-signing) for what it would take to remove this.
+### "Windows protected your PC"?
+
+That's expected. The app is free and not code-signed, so Windows doesn't recognise the publisher. It is safe to install:
+
+1. Click **More info** (small text under the message).
+2. Click **Run anyway**.
+3. The normal setup wizard opens. You only see this once.
+
+**macOS:** right-click the app, choose **Open**, then confirm. See [Code signing](#code-signing) for why this happens.
 
 ## Run from source
 
@@ -220,7 +228,7 @@ cannot cut a release.
 
 The installers are unsigned, which is why first launch shows a warning. Removing it costs real money and is not worth it for most projects:
 
-- **Windows** — an OV code-signing certificate runs roughly $200–400/year, and SmartScreen still distrusts a new certificate until it accrues download reputation. An EV certificate (~$300–600/year, hardware token) skips the reputation wait.
+- **Windows** — an OV code-signing certificate runs roughly $200–400/year, and SmartScreen still distrusts a new certificate until it accrues download reputation. Since 2024 an EV certificate no longer skips that wait, so it buys nothing extra.
 - **macOS** — requires the Apple Developer Program at $99/year, after which the app can be signed and notarised and launches with no warning at all.
 
 If you ever buy certificates, they slot into the existing workflow as repository secrets — `tauri-action` reads them without any change to the build itself.
