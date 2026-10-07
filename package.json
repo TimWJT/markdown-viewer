@@ -1,6 +1,6 @@
 {
   "name": "markdown-viewer",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A markdown viewer that gets out of the way",
   "scripts": {
     "test": "node --test",
