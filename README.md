@@ -6,21 +6,22 @@ The whole UI is one self-contained HTML file — parser, sanitiser, syntax highl
 
 ## Download
 
-Grab an installer from the [Releases page](../../releases):
+### [→ Download the latest version](https://github.com/TimWJT/markdown-viewer/releases/latest)
 
-| Platform | File | Size |
-|----------|------|------|
-| Windows | `Markdown Viewer_x64-setup.exe` | — |
-| macOS (Apple silicon) | `Markdown Viewer_aarch64.dmg` | — |
-| macOS (Intel) | `Markdown Viewer_x64.dmg` | — |
-| Linux | `.deb` / `.AppImage` | — |
-| Any browser | `Markdown Viewer.html` | 532 KB, no install |
+On that page, open **Assets** and pick **one** file — the rest can be ignored:
 
-Installer sizes change with every build, and the only sizes this repository
-publishes are the ones for the exact release you are downloading — so the
-Releases page is the only place with a number to trust. The 532 KB figure is
-measured from the current build: `dist-standalone/Markdown Viewer.html` is
-544,849 bytes.
+| Your computer | Download the file ending in |
+|---------------|-----------------------------|
+| **Windows** | **`_x64-setup.exe`** |
+| **Mac with Apple silicon** (M1, M2, M3, M4…) | **`_aarch64.dmg`** |
+| **Mac with Intel** | **`_x64.dmg`** |
+| **Linux** (Ubuntu, Debian, Mint) | **`.deb`** |
+| **Linux** (any other) | **`.AppImage`** |
+| **No install** — runs in any browser | **`Markdown.Viewer.html`** (532 KB) |
+
+Not sure which Mac you have? Apple menu → **About This Mac**. "Chip: Apple M…" means Apple silicon; "Processor: Intel" means Intel.
+
+The other files are for special cases: `.msi` and `.rpm` are alternative installers for people who specifically need them, and `.app.tar.gz` / `.sig` files are used by the built-in updater — you never need to download those.
 
 Once installed, double-clicking any `.md` file opens it here.
 
